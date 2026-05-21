@@ -1,0 +1,23 @@
+2026-05-21 14:09:05 | WARNING  | api | Config load failed ([Errno 2] No such file or directory: 'D:\\Py_Projects\\lead_system\\config.json'), trying backup
+2026-05-21 14:09:05 | WARNING  | api | Backup also failed, using defaults
+2026-05-21 14:09:05 | WARNING  | api | Config load failed (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)), trying backup
+2026-05-21 14:09:05 | WARNING  | api | Backup also failed, using defaults
+2026-05-21 14:09:05 | WARNING  | api | Config load failed (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)), trying backup
+2026-05-21 14:09:05 | INFO     | api | Config recovered from backup
+2026-05-21 14:09:18 | WARNING  | api | Config load failed ([Errno 2] No such file or directory: 'D:\\Py_Projects\\lead_system\\config.json'), trying backup
+2026-05-21 14:09:18 | INFO     | api | Config recovered from backup
+2026-05-21 14:09:49 | WARNING  | api | Config load failed ([Errno 2] No such file or directory: 'D:\\Py_Projects\\lead_system\\config.json'), trying backup
+2026-05-21 14:09:49 | WARNING  | api | Backup also failed, using defaults
+2026-05-21 14:09:49 | WARNING  | api | Config load failed (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)), trying backup
+2026-05-21 14:09:49 | WARNING  | api | Backup also failed, using defaults
+2026-05-21 14:09:49 | WARNING  | api | Config load failed (Expecting property name enclosed in double quotes: line 1 column 2 (char 1)), trying backup
+2026-05-21 14:09:49 | INFO     | api | Config recovered from backup
+2026-05-21 14:10:33 | INFO     | api | Settings updated by user
+2026-05-21 14:39:13 | INFO     | api | Settings updated by user
+2026-05-21 14:39:13 | INFO     | api | Clutch scraper started: query='web development', max_pages=1
+2026-05-21 14:39:13 | INFO     | api | Creating browser session for API...
+2026-05-21 14:39:14 | INFO     | api | API browser session created successfully
+2026-05-21 14:39:14 | INFO     | api | Starting Clutch scrape | query='web development' | max_pages=1
+2026-05-21 14:39:15 | INFO     | api | Search URL: https://clutch.co/search?q=web+development
+2026-05-21 14:39:15 | INFO     | api | Navigation attempt 1/2
+2026-05-21 14:39:16 | WARNING  | api | Clutch scraper interrupted by user
