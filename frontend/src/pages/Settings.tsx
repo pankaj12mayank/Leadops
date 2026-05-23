@@ -62,7 +62,7 @@ export default function Settings() {
 
   useEffect(() => { load(); }, [load]);
 
-  function patch<K extends keyof SystemConfig>(section: K, key: string, value: unknown) {
+  function patch<K extends keyof SystemConfig>(section: K, key: keyof SystemConfig[K], value: SystemConfig[K][typeof key]) {
     if (!config) return;
     setConfig({
       ...config,
@@ -78,6 +78,7 @@ export default function Settings() {
       toast({ title: "Validation failed", description: errors.join(", "), variant: "destructive" });
       return;
     }
+    if (!window.confirm("Save these settings? This may affect running scrapers.")) return;
     setSaving(true);
     try {
       await updateSettings(config);
@@ -146,6 +147,7 @@ export default function Settings() {
                   <input
                     id="headless"
                     type="checkbox"
+                    aria-label="Headless mode toggle"
                     checked={config.browser.headless}
                     onChange={(e) => patch("browser", "headless", e.target.checked)}
                     className="rounded border-input h-4 w-4 accent-primary"
@@ -161,7 +163,11 @@ export default function Settings() {
                   min={1000}
                   step={1000}
                   value={config.browser.timeout}
-                  onChange={(e) => patch("browser", "timeout", parseInt(e.target.value) || 0)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") return;
+                    patch("browser", "timeout", parseInt(v) || 0);
+                  }}
                 />
               </FieldRow>
               <Separator />
@@ -172,7 +178,11 @@ export default function Settings() {
                   min={0}
                   step={1}
                   value={config.browser.retry_count}
-                  onChange={(e) => patch("browser", "retry_count", parseInt(e.target.value) || 0)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") return;
+                    patch("browser", "retry_count", parseInt(v) || 0);
+                  }}
                 />
               </FieldRow>
               <Separator />
@@ -183,7 +193,11 @@ export default function Settings() {
                   min={0}
                   step={0.1}
                   value={config.browser.min_delay}
-                  onChange={(e) => patch("browser", "min_delay", parseFloat(e.target.value) || 0)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") return;
+                    patch("browser", "min_delay", parseFloat(v) || 0);
+                  }}
                 />
               </FieldRow>
               <Separator />
@@ -194,7 +208,11 @@ export default function Settings() {
                   min={0}
                   step={0.1}
                   value={config.browser.max_delay}
-                  onChange={(e) => patch("browser", "max_delay", parseFloat(e.target.value) || 0)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") return;
+                    patch("browser", "max_delay", parseFloat(v) || 0);
+                  }}
                 />
               </FieldRow>
               <Separator />
@@ -205,7 +223,11 @@ export default function Settings() {
                   min={1}
                   step={1}
                   value={config.browser.concurrency}
-                  onChange={(e) => patch("browser", "concurrency", parseInt(e.target.value) || 1)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") return;
+                    patch("browser", "concurrency", parseInt(v) || 1);
+                  }}
                 />
               </FieldRow>
             </CardContent>
@@ -239,7 +261,7 @@ export default function Settings() {
             <Card className="border-destructive/50 bg-destructive/5">
               <CardContent className="py-3">
                 <ul className="text-xs text-destructive space-y-0.5">
-                  {validationErrors.map((e, i) => <li key={i}>{e}</li>)}
+                  {validationErrors.map((e) => <li key={e}>{e}</li>)}
                 </ul>
               </CardContent>
             </Card>

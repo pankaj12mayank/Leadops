@@ -8,6 +8,15 @@ export const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+api.interceptors.response.use(
+  (response) => {
+    if (response.data && typeof response.data === "object" && "success" in response.data) {
+      return { ...response, data: response.data.data ?? response.data };
+    }
+    return response;
+  }
+);
+
 export interface HealthResponse {
   status: string;
   browser_session: string;
@@ -108,11 +117,11 @@ export function getExports(): Promise<ExportsResponse> {
 }
 
 export function deleteExport(filePath: string): Promise<{ deleted: boolean; path: string }> {
-  return api.delete(`/export/${encodeURI(filePath)}`).then((r) => r.data);
+  return api.delete(`/export/${encodeURIComponent(filePath)}`).then((r) => r.data);
 }
 
 export function getExportDownloadUrl(file: ExportFile): string {
-  return `${API_BASE}/download/${encodeURI(file.path)}`;
+  return `${API_BASE}/download/${encodeURIComponent(file.path)}`;
 }
 
 export interface GeoLocation {

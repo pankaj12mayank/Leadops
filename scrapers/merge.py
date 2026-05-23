@@ -478,23 +478,18 @@ async def run_merge_engine(logger, confirm: bool = False) -> bool:
 def cleanup_old_exports(logger: logging.Logger, retention_days: int = 30, max_size_mb: int = 500) -> int:
     """Remove export files older than retention_days. Returns number of files deleted."""
     from config import BASE_DIR as cfg_base_dir
-    from config import load_config
-
-    cfg = load_config()
-    retention = cfg.get("export", {}).get("retention_days", retention_days)
-    max_size = cfg.get("export", {}).get("max_size_mb", max_size_mb)
 
     export_root = cfg_base_dir / "exports"
     if not export_root.exists():
         logger.info("No exports directory found, skipping cleanup")
         return 0
 
-    cutoff = datetime.now().timestamp() - retention * 86400
+    cutoff = datetime.now().timestamp() - retention_days * 86400
     deleted = 0
     total_size = 0
 
     for ext in ("csv", "json", "parquet", "xlsx"):
-        for f in export_root.rglob(f"*.{ext}"):
+        for f in sorted(export_root.rglob(f"*.{ext}"), key=lambda p: p.stat().st_mtime):
             try:
                 total_size += f.stat().st_size
                 if f.stat().st_mtime < cutoff:
@@ -505,11 +500,11 @@ def cleanup_old_exports(logger: logging.Logger, retention_days: int = 30, max_si
                 logger.warning("Failed to process %s: %s", f, e)
 
     size_mb = total_size / (1024 * 1024)
-    if size_mb > max_size:
-        logger.info("Export size %.1f MB exceeds limit %d MB, triggering full cleanup", size_mb, max_size)
-        files_by_age = sorted(export_root.rglob("*"), key=lambda p: p.stat().st_mtime)
+    if size_mb > max_size_mb:
+        logger.info("Export size %.1f MB exceeds limit %d MB, triggering full cleanup", size_mb, max_size_mb)
+        files_by_age = sorted([f for f in export_root.rglob("*") if f.is_file()], key=lambda p: p.stat().st_mtime)
         for f in files_by_age:
-            if total_size <= max_size * 1024 * 1024:
+            if total_size <= max_size_mb * 1024 * 1024:
                 break
             try:
                 sz = f.stat().st_size

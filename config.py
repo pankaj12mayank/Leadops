@@ -13,11 +13,9 @@ _env_path = Path(__file__).resolve().parent / ".env"
 if _env_path.exists():
     load_dotenv(_env_path)
 
-_ENV_API_KEY = _os.environ.get("API_KEY", "")
-_ENV_CORS_ORIGINS = _os.environ.get("CORS_ORIGINS", "")
-_ENV_HOST = _os.environ.get("API_HOST", "")
-_ENV_PORT = _os.environ.get("API_PORT", "")
-_ENV_SESSION_KEY = _os.environ.get("SESSION_ENCRYPT_KEY", "")
+
+def _env(key: str, default: str = "") -> str:
+    return _os.environ.get(key, default)
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -114,21 +112,25 @@ def load_config() -> dict[str, Any]:
         except (FileNotFoundError, json.JSONDecodeError, PermissionError, OSError):
             result = dict(DEFAULT_CONFIG)
 
-    if _ENV_API_KEY:
-        result.setdefault("api", {})["api_key"] = _ENV_API_KEY
-    if _ENV_CORS_ORIGINS:
-        result.setdefault("api", {})["allowed_origins"] = [o.strip() for o in _ENV_CORS_ORIGINS.split(",")]
-    if _ENV_HOST:
-        result.setdefault("api", {})["host"] = _ENV_HOST
-    if _ENV_PORT and _ENV_PORT.isdigit():
-        port_val = int(_ENV_PORT)
+    api_key = _env("API_KEY")
+    cors_origins = _env("CORS_ORIGINS")
+    host = _env("API_HOST")
+    port = _env("API_PORT")
+    if api_key:
+        result.setdefault("api", {})["api_key"] = api_key
+    if cors_origins:
+        result.setdefault("api", {})["allowed_origins"] = [o.strip() for o in cors_origins.split(",")]
+    if host:
+        result.setdefault("api", {})["host"] = host
+    if port and port.isdigit():
+        port_val = int(port)
         if 1 <= port_val <= 65535:
             result.setdefault("api", {})["port"] = port_val
     return result
 
 
 def get_session_encrypt_key() -> str:
-    return _ENV_SESSION_KEY
+    return _env("SESSION_ENCRYPT_KEY")
 
 
 def save_config(config_dict: dict[str, Any]) -> None:
@@ -136,9 +138,8 @@ def save_config(config_dict: dict[str, Any]) -> None:
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(config_dict, f, indent=4, ensure_ascii=False)
-        if CONFIG_PATH.exists():
-            shutil.copy2(str(CONFIG_PATH), str(CONFIG_BACKUP_PATH))
         tmp_path.replace(CONFIG_PATH)
+        shutil.copy2(str(CONFIG_PATH), str(CONFIG_BACKUP_PATH))
     except OSError:
         if tmp_path.exists():
             tmp_path.unlink()

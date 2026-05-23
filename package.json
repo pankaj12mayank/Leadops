@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev:frontend": "cd frontend && npm run dev",
-    "dev:backend": "python -m uvicorn api.server:app --reload --host 127.0.0.1 --port 8000",
+    "dev:backend": "node -e \"try{require('child_process').execSync('python -c \\\"import playwright\\\"',{stdio:'pipe'})}catch(e){console.error('ERROR: playwright not installed. Run: npm run setup');process.exit(1)}\" && python -m uvicorn api.server:app --reload --host 127.0.0.1 --port 8000",
     "dev": "concurrently -n fe,be -c cyan,yellow \"npm run dev:frontend\" \"npm run dev:backend\"",
     "build": "cd frontend && npm run build",
     "lint:py": "ruff check .",
@@ -13,8 +13,11 @@
     "test:py": "pytest",
     "test:ts": "cd frontend && npx vitest run",
     "test": "npm run test:py && npm run test:ts",
-    "clean": "rm -rf frontend/dist exports/**/*.csv exports/**/*.json exports/**/*.parquet exports/**/*.xlsx temp screenshots",
-    "setup": "python -m venv venv && .\\venv\\Scripts\\pip install -r requirements.txt && cd frontend && npm install"
+    "clean": "node -e \"require('fs').rmSync('frontend/dist',{recursive:true,force:true}); require('fs').rmSync('temp',{recursive:true,force:true}); require('fs').rmSync('screenshots',{recursive:true,force:true}); ['csv','json','parquet','xlsx'].forEach(e=>require('fs').readdirSync('exports').forEach(d=>require('fs').readdirSync('exports/'+d).filter(f=>f.endsWith('.'+e)).forEach(f=>require('fs').rmSync('exports/'+d+'/'+f))))\"",
+    "setup": "python -m venv venv && pip install -r requirements.txt && playwright install chromium && cd frontend && npm install",
+    "check:playwright": "python -c \"import playwright; print('ok')\"",
+    "lock:py": "pip freeze > requirements.lock",
+    "lock:ts": "cd frontend && npm install --package-lock-only"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

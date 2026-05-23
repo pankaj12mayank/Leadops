@@ -27,6 +27,7 @@ from scrapers.clutch import run_clutch_scraper
 from scrapers.goodfirms import run_goodfirms_scraper
 from scrapers.linkedin import run_linkedin_enrichment
 from scrapers.maps import run_maps_scraper
+from scrapers.base import export_dataframe_to_file
 from scrapers.merge import cleanup_old_exports, run_merge_engine
 from session_encrypt import decrypt_state, encrypt_state, make_key_from_secret
 
@@ -94,19 +95,19 @@ async def _save_screenshot(page: Page, label: str = "screenshot") -> Path | None
         return None
 
 
-_export_df_logger = logging.getLogger("main.export")
+_logger = logging.getLogger("lead_system")
 
 
 def _export_dataframe(df: pd.DataFrame, filename: str, export_format: str) -> Path | None:
     if df.empty:
-        _export_df_logger.warning("DataFrame is empty, skipping export for %s", filename)
+        _logger.warning("DataFrame is empty, skipping export for %s", filename)
         return None
     safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in filename)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     ext = export_format.strip().lower()
     known = {"csv", "json", "parquet", "xlsx"}
     if ext not in known:
-        _export_df_logger.warning("Unknown export format '%s', falling back to csv", ext)
+        _logger.warning("Unknown export format '%s', falling back to csv", ext)
         ext = "csv"
     out = BASE_DIR / "exports" / "merged" / f"{ts}_{safe_name}.{ext}"
     try:
@@ -120,14 +121,14 @@ def _export_dataframe(df: pd.DataFrame, filename: str, export_format: str) -> Pa
             try:
                 df.to_excel(out, index=False)
             except Exception as xl_err:
-                _export_df_logger.error("XLSX export failed for %s: %s, falling back to CSV", filename, xl_err)
+                _logger.error("XLSX export failed for %s: %s, falling back to CSV", filename, xl_err)
                 ext = "csv"
                 out = out.with_suffix(".csv")
                 df.to_csv(out, index=False, encoding="utf-8-sig")
-        _export_df_logger.info("Exported %d rows to %s", len(df), out)
+        _logger.info("Exported %d rows to %s", len(df), out)
         return out
     except Exception as e:
-        _export_df_logger.error("Export failed for %s: %s", filename, e)
+        _logger.error("Export failed for %s: %s", filename, e)
         return None
 
 
@@ -413,7 +414,8 @@ async def _menu_run_linkedin(cfg: dict[str, Any]) -> None:
     print("=" * 55)
     print("   Lightweight enrichment — safe, slow, logged-in session only.")
     print("   Using existing browser session.")
-    default_csv = BASE_DIR / "exports" / "linkedin" / "input_companies.csv"
+    export_dir = cfg.get("paths", {}).get("exports", "exports")
+    default_csv = BASE_DIR / export_dir / "linkedin" / "input_companies.csv"
     input_csv = input(f"Path to CSV with companies (default: {default_csv}): ").strip()
     csv_path = Path(input_csv) if input_csv else default_csv
     if not csv_path.exists():
@@ -491,7 +493,8 @@ async def _show_menu(cfg: dict[str, Any]) -> None:
         elif choice == "6":
             await _menu_run_merge(cfg)
         elif choice == "7":
-            deleted = cleanup_old_exports(_logger)
+            loop = asyncio.get_running_loop()
+            deleted = await loop.run_in_executor(None, cleanup_old_exports, _logger)
             print(f"\nCleanup removed {deleted} old export file(s).")
         elif choice == "8":
             print("\nExiting...")
@@ -507,7 +510,7 @@ async def main() -> None:
         print("ERROR: Python 3.10+ required")
         sys.exit(1)
 
-    in_venv = hasattr(sys, "real_prefix") or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
+    in_venv = sys.prefix != sys.base_prefix
     if not in_venv:
         print("WARNING: Not running in a virtual environment. Create one with: python -m venv venv")
 

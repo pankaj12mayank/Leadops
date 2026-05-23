@@ -88,31 +88,41 @@ export default function Logs() {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevLengthRef = useRef(0);
   const initialLoadDone = useRef(false);
+  const linesRef = useRef(lines);
 
   const load = useCallback(() => {
     const isInitial = !initialLoadDone.current;
     if (isInitial) setInitialLoading(true);
     setRefreshing(true);
     if (!isInitial) setError(null);
-    getLogs({ lines, reverse: true })
+    getLogs({ lines: linesRef.current, reverse: true })
       .then((d) => { setData(d); setError(null); })
       .catch((err) => {
         if (isInitial) setError(err instanceof Error ? err.message : "Failed to load logs");
       })
       .finally(() => { setRefreshing(false); setInitialLoading(false); initialLoadDone.current = true; });
+  }, []);
+
+  useEffect(() => {
+    linesRef.current = lines;
   }, [lines]);
 
   useEffect(() => {
     load();
     if (!autoRefresh) return;
-    const i = setInterval(load, 3000);
+
+    function tick() {
+      if (document.hidden) return;
+      load();
+    }
+    const i = setInterval(tick, 3000);
     return () => clearInterval(i);
   }, [load, autoRefresh]);
 
   useEffect(() => {
     if (!autoScroll || !containerRef.current || !data) return;
     if (data.entries.length > prevLengthRef.current) {
-      containerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+      containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: "smooth" });
     }
     prevLengthRef.current = data.entries.length;
   }, [data, autoScroll]);

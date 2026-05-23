@@ -25,6 +25,9 @@ def _check(url: str, timeout: int) -> bool:
                 print(f"HEALTHCHECK FAIL: status={status}", file=sys.stderr)
                 return False
             browser = data.get("browser_session", "unknown")
+            if browser != "active":
+                print(f"HEALTHCHECK FAIL: browser_session={browser} (expected 'active')", file=sys.stderr)
+                return False
             print(f"OK | browser={browser} | tasks={data.get('active_tasks', '?')}")
             return True
     except urllib.error.URLError as e:
@@ -38,11 +41,12 @@ def _check(url: str, timeout: int) -> bool:
 def main() -> int:
     url = "http://127.0.0.1:8000/health"
     timeout = 5
-    for i, arg in enumerate(sys.argv[1:]):
-        if arg == "--url" and i + 2 < len(sys.argv):
-            url = sys.argv[i + 2]
-        elif arg == "--timeout" and i + 2 < len(sys.argv):
-            timeout = int(sys.argv[i + 2])
+    args = sys.argv[1:]
+    for i, arg in enumerate(args):
+        if arg == "--url" and i + 1 < len(args):
+            url = args[i + 1]
+        elif arg == "--timeout" and i + 1 < len(args):
+            timeout = int(args[i + 1])
     return 0 if _check(url, timeout) else 1
 
 

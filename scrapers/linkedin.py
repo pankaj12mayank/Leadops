@@ -247,8 +247,8 @@ async def _enrich_company(
 
     sc = cfg.get("scraping", {})
     delay = random.uniform(
-        sc.get("linkedin_min_company_delay", 4.0),
-        sc.get("linkedin_max_company_delay", 7.0),
+        float(sc.get("linkedin_min_company_delay", sc.get("min_company_delay", cfg["browser"]["min_delay"]))),
+        float(sc.get("linkedin_max_company_delay", sc.get("max_company_delay", cfg["browser"]["max_delay"]))),
     )
     logger.info("Waiting %.1f seconds before navigating to company page", delay)
     await asyncio.sleep(delay)
@@ -280,8 +280,8 @@ async def _enrich_company(
 
     sc = cfg.get("scraping", {})
     await asyncio.sleep(random.uniform(
-        sc.get("linkedin_min_page_delay", 2.0),
-        sc.get("linkedin_max_page_delay", 4.0),
+        float(sc.get("linkedin_min_page_delay", sc.get("min_page_delay", cfg["browser"]["min_delay"]))),
+        float(sc.get("linkedin_max_page_delay", sc.get("max_page_delay", cfg["browser"]["max_delay"]))),
     ))
 
     try:

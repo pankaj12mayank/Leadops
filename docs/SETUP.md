@@ -520,7 +520,7 @@ playwright install --force chromium
 **Frontend cannot reach API (CORS errors in browser console)**
 
 - Ensure the API server is running on port 8000
-- The API has CORS middleware configured to allow all origins by default
+- The API has CORS middleware configured to allow specific origins (see `config.json` `api.allowed_origins`)
 - If running on a different port, update the Vite proxy config in `frontend/vite.config.ts`
 
 ### Session expiration

@@ -1,3 +1,5 @@
+import asyncio
+import signal
 import sys
 from pathlib import Path
 
@@ -16,7 +18,17 @@ def main():
     port = int(port_str) if port_str.isdigit() else 8000
     print(f"\nStarting API server at http://{host}:{port}")
     print("Press Ctrl+C to stop.\n")
-    uvicorn.run("api.server:app", host=host, port=port, reload=False)
+
+    cfg = {"host": host, "port": port, "use_reloader": False}
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+    uvicorn.run(
+        "api.server:app",
+        host=cfg["host"],
+        port=cfg["port"],
+        reload=False,
+    )
 
 
 if __name__ == "__main__":

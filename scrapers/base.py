@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 from playwright.async_api import Page
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from config import BASE_DIR
 
 
 class ScraperError(Exception):
@@ -37,19 +37,21 @@ class RateLimitError(ScraperError):
     pass
 
 
-_CIRCUIT_HISTORY: dict[str, deque] = defaultdict(lambda: deque(maxlen=20))
+_CIRCUIT_HISTORY: dict[tuple[str, str], deque] = defaultdict(lambda: deque(maxlen=20))
 
 
-def _circuit_open(label: str) -> bool:
-    history = _CIRCUIT_HISTORY[label]
+def _circuit_open(label: str, namespace: str = "global") -> bool:
+    key = (namespace, label)
+    history = _CIRCUIT_HISTORY[key]
     if len(history) < 10:
         return False
     failures = sum(1 for r in history if r == "fail")
     return failures / len(history) > 0.5
 
 
-def _circuit_record(label: str, result: str) -> None:
-    _CIRCUIT_HISTORY[label].append(result)
+def _circuit_record(label: str, result: str, namespace: str = "global") -> None:
+    key = (namespace, label)
+    _CIRCUIT_HISTORY[key].append(result)
 
 
 async def scroll_slowly(page: Page, logger: logging.Logger, steps: int = 8, delay: float = 0.4) -> None:
@@ -70,7 +72,7 @@ async def scroll_slowly(page: Page, logger: logging.Logger, steps: int = 8, dela
 
 async def accept_cookies(page: Page, logger: logging.Logger, selectors: str, timeout: int = 5000) -> bool:
     try:
-        for sel in selectors.split(", "):
+        for sel in re.split(r",\s+", selectors.strip()):
             btn = page.locator(sel).first
             if await btn.count() > 0:
                 await btn.click(timeout=timeout)
@@ -199,6 +201,8 @@ async def navigate_with_retry(page: Page, url: str, logger: logging.Logger, cfg:
             ok = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
             if ok is None:
                 raise NavigationError("Navigation returned None")
+            if not ok.ok:
+                raise NavigationError(f"Navigation returned HTTP {ok.status}")
             try:
                 await page.wait_for_load_state("networkidle", timeout=timeout)
             except Exception:
@@ -298,20 +302,20 @@ async def go_to_next_page(
             return None
 
 
-async def retry_extraction(coro, logger, max_retries: int = 2, delay: float = 1.0, label: str = "item"):
-    if _circuit_open(label):
+async def retry_extraction(coro, logger, max_retries: int = 2, delay: float = 1.0, label: str = "item", namespace: str = "global"):
+    if _circuit_open(label, namespace):
         logger.warning("Circuit open for '%s', skipping extraction", label)
         return None
     for attempt in range(1, max_retries + 1):
         try:
             result = await coro
-            _circuit_record(label, "ok")
+            _circuit_record(label, "ok", namespace)
             return result
         except Exception as e:
             logger.warning("Retry %d/%d for %s failed: %s", attempt, max_retries, label, e)
             if attempt < max_retries:
                 await asyncio.sleep(delay * attempt)
-    _circuit_record(label, "fail")
+    _circuit_record(label, "fail", namespace)
     return None
 
 

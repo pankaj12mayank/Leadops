@@ -46,7 +46,7 @@ export const SCRAPERS: ScraperDef[] = [
     label: "LinkedIn Enrichment",
     description: "Enrich existing company leads with LinkedIn data",
     inputs: [
-      { key: "csv_path", label: "CSV file path", type: "text", defaultValue: "exports/linkedin/input_companies.csv" },
+      { key: "csv_path", label: "CSV file path (leave empty for default)", type: "text", defaultValue: "" },
     ],
   },
 ];

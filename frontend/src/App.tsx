@@ -14,23 +14,21 @@ const Settings = lazy(() => import("@/pages/Settings"));
 
 export default function App() {
   return (
-    <ErrorBoundary>
-      <ToastProvider>
-        <BrowserRouter>
-          <Suspense fallback={<PageLoading />}>
-            <Routes>
-              <Route element={<AppLayout />}>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/scrapers" element={<Scrapers />} />
-                <Route path="/logs" element={<Logs />} />
-                <Route path="/exports" element={<Exports />} />
-                <Route path="/settings" element={<Settings />} />
-              </Route>
-            </Routes>
-          </Suspense>
-          <Toaster />
-        </BrowserRouter>
-      </ToastProvider>
-    </ErrorBoundary>
+    <ToastProvider>
+      <BrowserRouter>
+        <Suspense fallback={<PageLoading />}>
+          <Routes>
+            <Route element={<AppLayout />}>
+              <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+              <Route path="/scrapers" element={<ErrorBoundary><Scrapers /></ErrorBoundary>} />
+              <Route path="/logs" element={<ErrorBoundary><Logs /></ErrorBoundary>} />
+              <Route path="/exports" element={<ErrorBoundary><Exports /></ErrorBoundary>} />
+              <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
+            </Route>
+          </Routes>
+        </Suspense>
+        <Toaster />
+      </BrowserRouter>
+    </ToastProvider>
   );
 }

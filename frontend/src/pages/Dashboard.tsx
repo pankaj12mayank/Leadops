@@ -11,7 +11,6 @@ export default function Dashboard() {
   const [exports, setExports] = useState<ExportsResponse | null>(null);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initialLoadDone = useRef(false);
 
@@ -20,11 +19,10 @@ export default function Dashboard() {
     if (!initialLoadDone.current) {
       setInitialLoading(true);
     }
-    setLoading(true);
     Promise.all([getHealth(), getExports(), getStatus()])
       .then(([h, e, s]) => { setHealth(h); setExports(e); setStatus(s); })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load dashboard"))
-      .finally(() => { setLoading(false); setInitialLoading(false); initialLoadDone.current = true; });
+      .finally(() => { setInitialLoading(false); initialLoadDone.current = true; });
   }, []);
 
   useEffect(() => { load(); const i = setInterval(load, 15000); return () => clearInterval(i); }, [load]);
@@ -83,8 +81,8 @@ export default function Dashboard() {
               <p className="text-sm text-muted-foreground py-8 text-center">No export files yet</p>
             ) : (
               <div className="space-y-2">
-                {exportFiles.slice(0, 8).map((f, i) => (
-                  <div key={i} className="flex items-center justify-between text-sm py-1.5 border-b border-border last:border-0">
+                {exportFiles.slice(0, 8).map((f) => (
+                  <div key={f.filename} className="flex items-center justify-between text-sm py-1.5 border-b border-border last:border-0">
                     <div className="flex items-center gap-2 min-w-0">
                       <StatusBadge value={f.source} type="source" />
                       <span className="truncate text-xs">{f.filename}</span>

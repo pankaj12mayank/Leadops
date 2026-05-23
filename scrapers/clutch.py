@@ -174,18 +174,17 @@ async def _extract_all_cards(page: Page, cfg: dict[str, Any], seen_urls: set[str
                         _extract_card_data(page, card, cfg),
                         logger,
                         label=f"card {i}",
+                        namespace="clutch",
                     )
                 except Exception:
                     logger.warning("Card extraction failed in _try_card")
                     return None
 
-            sem = asyncio.Semaphore(concurrency) if concurrency > 1 else None
+            sem = asyncio.Semaphore(concurrency)
 
             async def _bounded(i: int):
-                if sem:
-                    async with sem:
-                        return await _try_card(i)
-                return await _try_card(i)
+                async with sem:
+                    return await _try_card(i)
 
             results = await asyncio.gather(*[_bounded(i) for i in range(count)], return_exceptions=True)
 
@@ -220,8 +219,6 @@ async def run_clutch_scraper(
     all_leads: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     current_page = 1
-    cfg["browser"]["retry_count"]
-
     logger.info("Starting Clutch scrape | query='%s' | max_pages=%d", query, max_pages)
 
     try:

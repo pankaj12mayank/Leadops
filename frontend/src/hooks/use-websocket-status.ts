@@ -8,17 +8,18 @@ export function useWebSocketStatus(pollInterval = 15000) {
   const [loading, setLoading] = useState(true);
   const ws = useRef<WebSocket | null>(null);
   const mountedRef = useRef(true);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
     mountedRef.current = true;
-    let pollTimer: ReturnType<typeof setInterval>;
 
     function startPolling() {
+      clearInterval(pollTimerRef.current);
       setLoading(true);
       getStatus()
         .then((s) => { if (mountedRef.current) { setStatus(s); setLoading(false); } })
         .catch(() => { if (mountedRef.current) setLoading(false); });
-      pollTimer = setInterval(() => {
+      pollTimerRef.current = setInterval(() => {
         getStatus()
           .then((s) => { if (mountedRef.current) setStatus(s); })
           .catch(() => {});
@@ -53,7 +54,7 @@ export function useWebSocketStatus(pollInterval = 15000) {
     return () => {
       mountedRef.current = false;
       if (ws.current) ws.current.close();
-      clearInterval(pollTimer);
+      clearInterval(pollTimerRef.current);
     };
   }, [pollInterval]);
 

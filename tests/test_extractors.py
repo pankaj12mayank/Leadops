@@ -1,10 +1,14 @@
-import pytest
-import sys
+import logging
 from pathlib import Path
+import sys
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scrapers.base import (
+    accept_cookies,
     build_page_url,
     extract_rating_from_text,
     extract_employees,
@@ -69,8 +73,7 @@ class TestExtractEmployees:
     @pytest.mark.asyncio
     async def test_single_value_with_plus(self):
         result = await extract_employees("1000+ Employees")
-        assert result is not None
-        assert "1000" in result
+        assert result == "1000+ Employees"
 
     @pytest.mark.asyncio
     async def test_none_returns_none(self):
@@ -85,9 +88,7 @@ class TestExtractHourlyRate:
     @pytest.mark.asyncio
     async def test_dollar_range_per_hr(self):
         result = await extract_hourly_rate("$50 - $80 /hr")
-        assert result is not None
-        assert "$" in result
-        assert "/hr" in result
+        assert result == "$50-$80/hr"
 
     @pytest.mark.asyncio
     async def test_single_dollar_per_hr(self):
@@ -121,3 +122,41 @@ class TestExtractServices:
     @pytest.mark.asyncio
     async def test_short_string_returns_none(self):
         assert await extract_services("a") is None
+
+
+class TestAcceptCookies:
+    @pytest.mark.asyncio
+    async def test_empty_selectors_returns_false(self):
+        page = AsyncMock()
+        first_loc = AsyncMock()
+        first_loc.count = AsyncMock(return_value=0)
+        locator_mock = AsyncMock()
+        locator_mock.first = first_loc
+        page.locator.return_value = locator_mock
+        result = await accept_cookies(page, logging.getLogger("test"), "button.btn")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_found_button_clicks(self):
+        # Create the locator chain: page.locator() -> locator -> locator.first -> first_loc
+        first_loc = AsyncMock()
+        first_loc.count = AsyncMock(return_value=1)
+        first_loc.click = AsyncMock()
+
+        locator = AsyncMock()
+        locator.first = first_loc
+
+        # Page.locator is a method that returns locator when called
+        page = AsyncMock()
+        page.locator = Mock(return_value=locator)
+
+        result = await accept_cookies(page, logging.getLogger("test"), "button.btn")
+        assert result is True
+
+
+class TestBuildPageUrlEdgeCases:
+    def test_trailing_slash(self):
+        assert build_page_url("https://example.com/", 2) == "https://example.com/?page=2"
+
+    def test_multi_page_with_hash(self):
+        assert build_page_url("https://example.com#section", 3) == "https://example.com#section?page=3"

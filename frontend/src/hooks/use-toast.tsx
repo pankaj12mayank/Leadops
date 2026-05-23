@@ -20,8 +20,6 @@ function genId() {
   return String(++count);
 }
 
-const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
-
 function reducer(state: ToastState, action: Action): ToastState {
   switch (action.type) {
     case "ADD_TOAST":
@@ -37,12 +35,50 @@ function reducer(state: ToastState, action: Action): ToastState {
 const ToastContext = React.createContext<{
   state: ToastState;
   dispatch: React.Dispatch<Action>;
+  toast: (props: Omit<Toast, "id">) => string;
+  dismiss: (id: string) => void;
 } | null>(null);
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = React.useReducer(reducer, { toasts: [] });
+  const timeoutRefs = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  React.useEffect(() => {
+    return () => {
+      timeoutRefs.current.forEach((t) => clearTimeout(t));
+      timeoutRefs.current.clear();
+    };
+  }, []);
+
+  const toastFn = React.useCallback((props: Omit<Toast, "id">) => {
+    const id = genId();
+    dispatch({ type: "ADD_TOAST", toast: { ...props, id } });
+    const timeout = setTimeout(() => {
+      dispatch({ type: "DISMISS_TOAST", toastId: id });
+      timeoutRefs.current.delete(id);
+    }, 5000);
+    timeoutRefs.current.set(id, timeout);
+    return id;
+  }, []);
+
+  const dismissFn = React.useCallback((id: string) => {
+    dispatch({ type: "DISMISS_TOAST", toastId: id });
+    const t = timeoutRefs.current.get(id);
+    if (t) {
+      clearTimeout(t);
+      timeoutRefs.current.delete(id);
+    }
+  }, []);
+
+  const ctx = React.useMemo(() => ({
+    state,
+    dispatch,
+    toast: toastFn,
+    dismiss: dismissFn,
+  }), [state, toastFn, dismissFn]);
+
   return (
-    <ToastContext.Provider value={{ state, dispatch }}>
+    <ToastContext.Provider value={ctx}>
       {children}
     </ToastContext.Provider>
   );
@@ -54,14 +90,6 @@ export function toast(props: Omit<Toast, "id">) {
     detail: { ...props, id },
   });
   window.dispatchEvent(event);
-  const timeout = setTimeout(() => {
-    const dismissEvent = new CustomEvent("toast-dismiss", {
-      detail: { toastId: id },
-    });
-    window.dispatchEvent(dismissEvent);
-    toastTimeouts.delete(id);
-  }, 5000);
-  toastTimeouts.set(id, timeout);
   return id;
 }
 
@@ -94,10 +122,7 @@ export function useToast() {
 
   return {
     ...ctx.state,
-    toast,
-    dismiss: (id: string) => {
-      const event = new CustomEvent("toast-dismiss", { detail: { toastId: id } });
-      window.dispatchEvent(event);
-    },
+    toast: ctx.toast,
+    dismiss: ctx.dismiss,
   };
 }

@@ -34,7 +34,13 @@ app = FastAPI(
     description="Async API for the Playwright lead extraction system",
 )
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=_get_client_ip, default_limits=["60/minute"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -75,9 +81,10 @@ async def _rewrite_api_prefix(request: Request, call_next):
     if path.startswith("/api"):
         remaining = path[4:] or "/"
         request.scope["path"] = remaining
-        rp = request.scope.get("raw_path", b"")
-        if rp:
-            request.scope["raw_path"] = rp[4:] or b"/"
+        raw_path = request.scope.get("raw_path", b"")
+        if raw_path:
+            prefix_len = len(b"/api")
+            request.scope["raw_path"] = raw_path[prefix_len:] or b"/"
     return await call_next(request)
 
 
@@ -96,6 +103,9 @@ _tasks: dict[str, dict[str, Any]] = {}
 _active_sources: set = set()
 _task_refs: dict[str, asyncio.Task] = {}
 _ws_clients: list[WebSocket] = []
+_ws_rate_limiter: dict[str, float] = {}
+_ws_rate_limit_max = 5
+_ws_rate_limit_window = 60.0
 _browser_lock = asyncio.Lock()
 _FILE_CACHE: dict[str, Any] = {"ts": 0, "data": []}
 _FILE_CACHE_TTL = 5.0
@@ -108,7 +118,7 @@ async def _broadcast_status() -> None:
         "tasks": list(_tasks.values()),
     }
     stale: list[WebSocket] = []
-    for ws in _ws_clients:
+    for ws in list(_ws_clients):
         try:
             await ws.send_json(status)
         except Exception as e:
@@ -133,6 +143,12 @@ _CONFIG_CACHE_TTL = 5.0
 
 def _get_config() -> dict[str, Any]:
     now = time.time()
+    try:
+        mtime = CONFIG_PATH.stat().st_mtime
+    except OSError:
+        mtime = 0
+    if mtime > _CONFIG_CACHE["ts"]:
+        _CONFIG_CACHE["ts"] = 0.0
     if now - _CONFIG_CACHE["ts"] < _CONFIG_CACHE_TTL and _CONFIG_CACHE["data"] is not None:
         return _CONFIG_CACHE["data"]
     cfg = _load_config()
@@ -162,7 +178,9 @@ async def _api_key_auth(request: Request, call_next):
     api_key = cfg.get("api", {}).get("api_key", "")
     if not api_key:
         return await call_next(request)
-    if request.url.path in ("/health", "/docs", "/openapi.json", "/redoc"):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if request.url.path in ("/health", "/docs", "/openapi.json", "/redoc", "/ws/status"):
         return await call_next(request)
     auth = request.headers.get("X-API-Key", "")
     if auth != api_key:
@@ -302,23 +320,23 @@ async def _check_browser_health() -> bool:
 async def _ensure_browser_session() -> bool:
     global _playwright_instance, _browser_context, _api_logger
 
-    if _browser_context is not None:
-        if await _check_browser_health():
-            return True
-        _api_logger.warning("Browser session unhealthy, restarting...")
-        try:
-            await _browser_context.close()
-        except (TimeoutError, PlaywrightTimeout, OSError):
-            pass
-        _browser_context = None
-        if _playwright_instance:
+    async with _browser_lock:
+        if _browser_context is not None:
+            if await _check_browser_health():
+                return True
+            _api_logger.warning("Browser session unhealthy, restarting...")
             try:
-                await _playwright_instance.stop()
+                await _browser_context.close()
             except (TimeoutError, PlaywrightTimeout, OSError):
                 pass
-            _playwright_instance = None
+            _browser_context = None
+            if _playwright_instance:
+                try:
+                    await _playwright_instance.stop()
+                except (TimeoutError, PlaywrightTimeout, OSError):
+                    pass
+                _playwright_instance = None
 
-    async with _browser_lock:
         if _browser_context is not None:
             return True
         try:
@@ -329,7 +347,7 @@ async def _ensure_browser_session() -> bool:
             geo = cfg["browser"].get("geolocation", {})
 
             _browser_context = await _playwright_instance.chromium.launch_persistent_context(
-                user_data_dir=str(BASE_DIR / cfg["session"]["storage_path"] / "api_profile"),
+                user_data_dir=str(BASE_DIR / cfg["session"]["storage_path"] / "profile"),
                 headless=cfg["browser"]["headless"],
                 viewport={"width": cfg["browser"]["viewport_width"], "height": cfg["browser"]["viewport_height"]},
                 user_agent=cfg["browser"]["user_agent"],
@@ -385,6 +403,7 @@ async def _run_task(task_id: str, source: str, coro) -> None:
         _tasks[task_id]["status"] = "cancelled"
         _tasks[task_id]["completed_at"] = datetime.now(UTC).isoformat()
         _api_logger.warning("Task %s (%s) was cancelled", task_id, source)
+        raise
     except Exception as e:
         _tasks[task_id]["status"] = "failed"
         _tasks[task_id]["error"] = str(e)
@@ -393,6 +412,8 @@ async def _run_task(task_id: str, source: str, coro) -> None:
     finally:
         _active_sources.discard(source)
         _task_refs.pop(source, None)
+        if task_id in _tasks:
+            _tasks[task_id]["completed_at"] = _tasks[task_id].get("completed_at", datetime.now(UTC).isoformat())
         await _broadcast_status()
 
 
@@ -405,8 +426,19 @@ def _trim_task_history() -> None:
     terminal = {k: v for k, v in _tasks.items() if v["status"] in ("completed", "failed", "cancelled")}
     if len(terminal) <= MAX_TASK_HISTORY:
         return
-    sorted_keys = sorted(terminal.keys(), key=lambda k: terminal[k].get("completed_at") or "")
-    for old_key in sorted_keys[: len(sorted_keys) - MAX_TASK_HISTORY]:
+    per_source = {}
+    for k, v in terminal.items():
+        src = v.get("source", "unknown")
+        per_source.setdefault(src, []).append((k, v.get("completed_at") or ""))
+    to_remove = []
+    overflow = len(terminal) - MAX_TASK_HISTORY
+    for src, tasks in per_source.items():
+        tasks.sort(key=lambda x: x[1])
+        keep = max(1, len(tasks) - overflow)
+        for k in tasks[:-keep]:
+            to_remove.append(k[0])
+    to_remove.sort(key=lambda k: terminal[k].get("completed_at") or "")
+    for old_key in to_remove[:overflow]:
         _tasks.pop(old_key, None)
 
 
@@ -689,28 +721,25 @@ async def get_logs(
     source: str | None = Query(None),
     reverse: bool = Query(True),
 ):
-    log_file = BASE_DIR / "logs" / "system.log"
+    cfg = _get_config()
+    log_path = cfg.get("logging", {}).get("file", "logs/system.log")
+    log_file = BASE_DIR / log_path
     if not log_file.exists():
-        return _success_response({"file": "logs/system.log", "entries": [], "total_lines": 0})
+        return _success_response({"file": log_path, "entries": [], "total_lines": 0})
 
     try:
-        total = 0
-        tail: list[str] = []
-        chunk_size = 8192
+        tail = []
         with open(log_file, encoding="utf-8", errors="replace") as f:
-            f.seek(0, 2)
-            file_size = f.tell()
-            pos = file_size
-            buf = ""
-            while pos > 0 and len(tail) < lines:
-                read_size = min(chunk_size, pos)
-                pos -= read_size
-                f.seek(pos)
-                chunk = f.read(read_size)
-                buf = chunk + buf
-                tail = [ln for ln in buf.split("\n") if ln][-lines:]
-                total = buf.count("\n") + pos // chunk_size * 200
-            total = file_size // 80 if total < len(tail) else total
+            total = sum(1 for _ in f)
+        if total == 0:
+            return _success_response({"file": log_path, "entries": [], "total_lines": 0})
+        with open(log_file, encoding="utf-8", errors="replace") as f:
+            read_count = max(0, total - lines)
+            for _ in range(read_count):
+                f.readline()
+            for line in f:
+                tail.append(line.rstrip("\n"))
+        tail = [ln for ln in tail if ln][-lines:]
 
         start_lineno = total - len(tail) + 1
         entries = [
@@ -730,7 +759,7 @@ async def get_logs(
             entries.reverse()
 
         return _success_response({
-            "file": "logs/system.log",
+            "file": log_path,
             "total_lines": total,
             "returned": len(entries),
             "entries": entries,
@@ -772,11 +801,11 @@ async def download_export(file_path: str):
     full_path = _validate_file_path(file_path)
 
     media_type = "text/csv" if full_path.suffix == ".csv" else "application/octet-stream"
+    safe_name = "".join(c for c in full_path.name if c.isascii() and c not in "\r\n\"\\")
     return FileResponse(
         path=str(full_path),
         media_type=media_type,
-        filename=full_path.name,
-        headers={"Content-Disposition": f'attachment; filename="{full_path.name}"'},
+        filename=safe_name,
     )
 
 
@@ -793,7 +822,7 @@ async def delete_export(file_path: str):
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
 
 
-@app.get("/settings", response_model=SystemConfig)
+@app.get("/settings")
 async def get_settings():
     try:
         cfg = _load_config()
@@ -802,7 +831,7 @@ async def get_settings():
         raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
 
 
-@app.post("/settings", response_model=SystemConfig)
+@app.post("/settings")
 @limiter.limit("30/minute")
 async def update_settings(request: Request, body: SystemConfig):
     try:
@@ -817,6 +846,13 @@ async def update_settings(request: Request, body: SystemConfig):
 
 @app.websocket("/ws/status")
 async def ws_status(websocket: WebSocket):
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    now = time.time()
+    last = _ws_rate_limiter.get(client_ip, 0.0)
+    if now - last < _ws_rate_limit_window and len([c for c in _ws_clients if c.client and c.client.host == client_ip]) >= _ws_rate_limit_max:
+        await websocket.close(code=1013)
+        return
+    _ws_rate_limiter[client_ip] = now
     await websocket.accept()
     _ws_clients.append(websocket)
     try:
@@ -841,7 +877,7 @@ async def ws_status(websocket: WebSocket):
 
 @app.get("/health")
 async def health():
-    session_ok = _browser_context is not None
+    session_ok = _browser_context is not None and await _check_browser_health()
     exports_dir = BASE_DIR / "exports"
     logs_dir = BASE_DIR / "logs"
     return _success_response({
@@ -868,8 +904,15 @@ class _CachedStaticFiles(StaticFiles):
 
 _frontend_dist = BASE_DIR / "frontend" / "dist"
 if _frontend_dist.exists():
-    app.mount(
-        "/",
-        _CachedStaticFiles(directory=str(_frontend_dist), html=True),
-        name="frontend",
-    )
+    @app.middleware("http")
+    async def _serve_frontend(request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/api") or path.startswith("/ws") or path in ("/health", "/docs", "/openapi.json", "/redoc"):
+            return await call_next(request)
+        static_file = _frontend_dist / path.lstrip("/")
+        if static_file.exists() and static_file.is_file():
+            return FileResponse(str(static_file))
+        index = _frontend_dist / "index.html"
+        if index.exists():
+            return FileResponse(str(index))
+        return await call_next(request)

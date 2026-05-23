@@ -185,6 +185,7 @@ async def _extract_all_cards(page: Page, cfg: dict[str, Any], seen_urls: set[str
                         _extract_card_data(page, card, cfg),
                         logger,
                         label=f"card {i}",
+                        namespace="goodfirms",
                     )
                 except Exception:
                     logger.warning("Card extraction failed in _try_card")
@@ -231,7 +232,6 @@ async def run_goodfirms_scraper(
     all_leads: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     current_page = 1
-    cfg["browser"]["retry_count"]
 
     logger.info("Starting GoodFirms scrape | query='%s' | max_pages=%d", query, max_pages)
 

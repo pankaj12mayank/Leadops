@@ -1,0 +1,23 @@
+services:
+  api:
+    build: .
+    container_name: leadops-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./exports:/app/exports
+      - ./logs:/app/logs
+      - ./sessions:/app/sessions
+      - ./screenshots:/app/screenshots
+      - ./temp:/app/temp
+    environment:
+      - API_KEY=${API_KEY:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}
+      - SESSION_ENCRYPT_KEY=${SESSION_ENCRYPT_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py", "--url", "http://127.0.0.1:8000/health", "--timeout", "5"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

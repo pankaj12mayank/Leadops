@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { memo, useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,10 +10,77 @@ import { toast } from "@/hooks/use-toast";
 import { Play, Merge, Loader2 } from "lucide-react";
 import { ErrorState } from "@/components/shared/ErrorState";
 
+const ScraperCard = memo(function ScraperCard({
+  scraper,
+  inputs,
+  isRunning,
+  onInputChange,
+  onStart,
+  onStop,
+}: {
+  scraper: ScraperDef;
+  inputs: Record<string, string>;
+  isRunning: boolean;
+  onInputChange: (key: string, value: string) => void;
+  onStart: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between">
+          <div>
+            <CardTitle className="text-sm">{scraper.label}</CardTitle>
+            <CardDescription className="mt-1">{scraper.description}</CardDescription>
+          </div>
+          <Badge variant={isRunning ? "default" : "secondary"}>
+            {isRunning ? "Running" : "Idle"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {scraper.inputs.map((inp) => (
+          <div key={inp.key}>
+            <label className="text-xs text-muted-foreground mb-1 block" htmlFor={`scraper-${scraper.id}-${inp.key}`}>{inp.label}</label>
+            <Input
+              id={`scraper-${scraper.id}-${inp.key}`}
+              placeholder={inp.defaultValue || `Enter ${inp.label.toLowerCase()}`}
+              value={inputs[inp.key] ?? inp.defaultValue}
+              onChange={(e) => onInputChange(inp.key, e.target.value)}
+              disabled={isRunning}
+            />
+          </div>
+        ))}
+        <div className="flex gap-2 mt-2">
+          <Button
+            className="flex-1"
+            size="sm"
+            disabled={isRunning}
+            onClick={onStart}
+            aria-label={`Start ${scraper.label}`}
+          >
+            <Play className="h-4 w-4 mr-2" /> Start
+          </Button>
+          {isRunning && (
+            <Button
+              className="flex-1"
+              size="sm"
+              variant="destructive"
+              onClick={onStop}
+              aria-label={`Stop ${scraper.label}`}
+            >
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Stop
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+});
+
 export default function Scrapers() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [inputs, setInputs] = useState<Record<string, Record<string, string>>>({});
-  const [, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [runningScrapers, setRunningScrapers] = useState<Set<string>>(new Set());
   const pollingRef = useRef(false);
@@ -24,7 +91,7 @@ export default function Scrapers() {
     getStatus()
       .then((s) => { setStatus(s); setFetchError(null); })
       .catch(() => { if (!status) setFetchError("Failed to connect to backend"); })
-      .finally(() => { pollingRef.current = false; setLoading(false); });
+      .finally(() => { pollingRef.current = false; });
   }, [status]);
 
   useEffect(() => { fetchStatus(); const i = setInterval(fetchStatus, 3000); return () => clearInterval(i); }, [fetchStatus]);
@@ -35,6 +102,9 @@ export default function Scrapers() {
     }
   }, [status]);
 
+  const scraperInputsRef = useRef(inputs);
+  scraperInputsRef.current = inputs;
+
   function setInput(scraperId: string, key: string, value: string) {
     setInputs((prev) => ({
       ...prev,
@@ -43,18 +113,19 @@ export default function Scrapers() {
   }
 
   function getInput(def: ScraperDef, key: string): string {
-    return inputs[def.id]?.[key] ?? def.inputs.find((i) => i.key === key)?.defaultValue ?? "";
+    return scraperInputsRef.current[def.id]?.[key] ?? def.inputs.find((i) => i.key === key)?.defaultValue ?? "";
   }
 
   async function handleStart(scraper: ScraperDef) {
+    const currentInputs = scraperInputsRef.current[scraper.id] || {};
     const body: Record<string, unknown> = {};
     for (const inp of scraper.inputs) {
-      const val = getInput(scraper, inp.key);
+      const val = currentInputs[inp.key] ?? inp.defaultValue;
       if (!val && inp.type === "text" && !inp.defaultValue) {
         toast({ title: "Missing input", description: `${inp.label} is required`, variant: "destructive" });
         return;
       }
-      body[inp.key] = inp.type === "number" ? (val === "" ? parseInt(inp.defaultValue) : Number(val)) : val;
+      body[inp.key] = inp.type === "number" ? (val === "" ? Number(inp.defaultValue) || 0 : Number(val)) : val;
     }
     setRunningScrapers((prev) => new Set(prev).add(scraper.id));
     try {
@@ -68,6 +139,7 @@ export default function Scrapers() {
   }
 
   async function handleStop(scraper: ScraperDef) {
+    if (!window.confirm(`Stop ${scraper.label}? In-progress data may be lost.`)) return;
     setRunningScrapers((prev) => { const s = new Set(prev); s.delete(scraper.id); return s; });
     try {
       await stopScraper(scraper.id);
@@ -111,55 +183,15 @@ export default function Scrapers() {
 
       <div className="grid gap-4 md:grid-cols-2">
         {SCRAPERS.map((scraper) => (
-          <Card key={scraper.id}>
-            <CardHeader className="pb-3">
-              <div className="flex items-start justify-between">
-                <div>
-                  <CardTitle className="text-sm">{scraper.label}</CardTitle>
-                  <CardDescription className="mt-1">{scraper.description}</CardDescription>
-                </div>
-                <Badge variant={isRunning(scraper.id) ? "default" : "secondary"}>
-                  {isRunning(scraper.id) ? "Running" : "Idle"}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {scraper.inputs.map((inp) => (
-                <div key={inp.key}>
-                  <label className="text-xs text-muted-foreground mb-1 block" htmlFor={`scraper-${scraper.id}-${inp.key}`}>{inp.label}</label>
-                  <Input
-                    id={`scraper-${scraper.id}-${inp.key}`}
-                    placeholder={inp.defaultValue || `Enter ${inp.label.toLowerCase()}`}
-                    value={getInput(scraper, inp.key)}
-                    onChange={(e) => setInput(scraper.id, inp.key, e.target.value)}
-                    disabled={isRunning(scraper.id)}
-                  />
-                </div>
-              ))}
-              <div className="flex gap-2 mt-2">
-                <Button
-                  className="flex-1"
-                  size="sm"
-                  disabled={isRunning(scraper.id)}
-                  onClick={() => handleStart(scraper)}
-                  aria-label={`Start ${scraper.label}`}
-                >
-                  <Play className="h-4 w-4 mr-2" /> Start
-                </Button>
-                {isRunning(scraper.id) && (
-                  <Button
-                    className="flex-1"
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => handleStop(scraper)}
-                    aria-label={`Stop ${scraper.label}`}
-                  >
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Stop
-                  </Button>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+          <ScraperCard
+            key={scraper.id}
+            scraper={scraper}
+            inputs={inputs[scraper.id] || {}}
+            isRunning={isRunning(scraper.id)}
+            onInputChange={(key, value) => setInput(scraper.id, key, value)}
+            onStart={() => handleStart(scraper)}
+            onStop={() => handleStop(scraper)}
+          />
         ))}
       </div>
 

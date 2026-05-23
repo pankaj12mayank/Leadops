@@ -454,7 +454,7 @@ async def run_maps_scraper(
                 continue
 
             new_in_cycle = [d for d in cards_data if d["business_name"].lower().strip() not in seen_names]
-            all_leads.extend(cards_data)
+            all_leads.extend(new_in_cycle)
             logger.info(
                 "Cycle %d: extracted %d leads (new: %d, total: %d)",
                 cycle,
@@ -530,7 +530,7 @@ async def run_maps_scraper(
                     print(f"\n[PARTIAL] Exported {len(all_leads)} leads to: {export_path}")
         except Exception:
             logger.warning("Failed to export partial data in finally block")
-    if page:
+        if page:
             try:
                 await page.close()
                 logger.debug("Maps scraper page closed")
