@@ -3,10 +3,9 @@ import json
 import logging
 import re
 import shutil
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import pandas as pd
 
@@ -23,28 +22,34 @@ NORMALIZED_COLUMNS = [
 ]
 
 
-def _load_export_base() -> Path:
-    try:
-        cfg_path = BASE_DIR / "config.json"
-        if cfg_path.exists():
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            exports_rel = cfg.get("paths", {}).get("exports", "exports")
-            return (BASE_DIR / exports_rel).resolve()
-    except Exception:
-        pass
-    return BASE_DIR / "exports"
+_EXPORT_BASE: Path | None = None
 
 
-_EXPORT_BASE = _load_export_base()
+def _get_export_base() -> Path:
+    global _EXPORT_BASE
+    if _EXPORT_BASE is None:
+        try:
+            cfg_path = BASE_DIR / "config.json"
+            if cfg_path.exists():
+                with open(cfg_path, encoding="utf-8") as f:
+                    cfg = json.load(f)
+                exports_rel = cfg.get("paths", {}).get("exports", "exports")
+                _EXPORT_BASE = (BASE_DIR / exports_rel).resolve()
+            else:
+                _EXPORT_BASE = BASE_DIR / "exports"
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError):
+            _EXPORT_BASE = BASE_DIR / "exports"
+    return _EXPORT_BASE
 
 
-SOURCE_DIRS = {
-    "clutch": _EXPORT_BASE / "clutch",
-    "goodfirms": _EXPORT_BASE / "goodfirms",
-    "maps": _EXPORT_BASE / "maps",
-    "linkedin": _EXPORT_BASE / "linkedin",
-}
+def _get_source_dirs() -> dict[str, Path]:
+    eb = _get_export_base()
+    return {
+        "clutch": eb / "clutch",
+        "goodfirms": eb / "goodfirms",
+        "maps": eb / "maps",
+        "linkedin": eb / "linkedin",
+    }
 
 COLUMN_MAP = {
     "clutch": {
@@ -95,7 +100,7 @@ COLUMN_MAP = {
     },
 }
 
-_logger: Optional[logging.Logger] = None
+_logger: logging.Logger | None = None
 
 
 def _set_logger(logger: logging.Logger) -> None:
@@ -125,38 +130,57 @@ def _normalize_name(name: Any) -> str:
     return re.sub(r"\s+", " ", str(name).strip().lower())
 
 
-def _read_csv_safe(path: Path) -> Optional[pd.DataFrame]:
+_CHUNK_SIZE = 5000
+
+
+def _read_csv_safe(path: Path, chunked: bool = False) -> pd.DataFrame | None:
+    if not chunked:
+        for attempt in range(3):
+            try:
+                if attempt == 0:
+                    df = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+                elif attempt == 1:
+                    df = pd.read_csv(path, encoding="utf-8-sig", on_bad_lines="skip", low_memory=False)
+                else:
+                    raw_rows = []
+                    with open(path, encoding="utf-8-sig", errors="replace") as f:
+                        reader = csv.reader(f)
+                        header = next(reader, None)
+                        if header is None:
+                            return None
+                        header = [h.strip() for h in header]
+                        for row in reader:
+                            if len(row) == len(header):
+                                raw_rows.append(row)
+                    if not raw_rows:
+                        return None
+                    df = pd.DataFrame(raw_rows, columns=header)
+                df.columns = [c.strip().lower() for c in df.columns]
+                _logger.info("Read %d rows from %s (attempt %d)", len(df), path.name, attempt + 1)
+                return df
+            except Exception as e:
+                _logger.warning("CSV read attempt %d failed for %s: %s", attempt + 1, path.name, e)
+        _logger.error("Failed to read CSV after 3 attempts: %s", path.name)
+        return None
+
+    chunks: list[pd.DataFrame] = []
     for attempt in range(3):
         try:
-            if attempt == 0:
-                df = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
-            elif attempt == 1:
-                df = pd.read_csv(
-                    path,
-                    encoding="utf-8-sig",
-                    on_bad_lines="skip",
-                    low_memory=False,
-                )
-            else:
-                raw_rows = []
-                with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
-                    reader = csv.reader(f)
-                    header = next(reader, None)
-                    if header is None:
-                        return None
-                    header = [h.strip() for h in header]
-                    for row in reader:
-                        if len(row) == len(header):
-                            raw_rows.append(row)
-                if not raw_rows:
-                    return None
-                df = pd.DataFrame(raw_rows, columns=header)
-            df.columns = [c.strip().lower() for c in df.columns]
-            _logger.info("Read %d rows from %s (attempt %d)", len(df), path.name, attempt + 1)
-            return df
+            reader = pd.read_csv(
+                path, encoding="utf-8-sig",
+                chunksize=_CHUNK_SIZE, on_bad_lines="skip", low_memory=False,
+            )
+            for c in reader:
+                c.columns = [col.strip().lower() for col in c.columns]
+                chunks.append(c)
+            if not chunks:
+                return None
+            result = pd.concat(chunks, ignore_index=True)
+            _logger.info("Read %d rows (chunked) from %s", len(result), path.name)
+            return result
         except Exception as e:
-            _logger.warning("CSV read attempt %d failed for %s: %s", attempt + 1, path.name, e)
-    _logger.error("Failed to read CSV after 3 attempts: %s", path.name)
+            _logger.warning("Chunked CSV read attempt %d failed for %s: %s", attempt + 1, path.name, e)
+    _logger.error("Failed to read CSV after 3 chunked attempts: %s", path.name)
     return None
 
 
@@ -164,6 +188,10 @@ def _map_to_normalized(df: pd.DataFrame, source_key: str) -> pd.DataFrame:
     mapping = COLUMN_MAP[source_key]
     rows = []
     used_map = {}
+
+    missing = [src for src in mapping if src not in df.columns]
+    if missing and _logger:
+        _logger.warning("Source '%s' missing expected columns: %s", source_key, missing)
 
     for src_col, tgt_col in mapping.items():
         if tgt_col is not None and src_col in df.columns:
@@ -224,7 +252,7 @@ def _filter_invalid_rows(df: pd.DataFrame) -> pd.DataFrame:
     return valid
 
 
-def _compute_dedup_key(row) -> Tuple[str, str, str]:
+def _compute_dedup_key(row) -> tuple[str, str, str]:
     return (
         _normalize_website(row.get("website", "")),
         _normalize_phone(row.get("phone", "")),
@@ -287,7 +315,7 @@ def _deduplicate(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def _compute_statistics(df: pd.DataFrame) -> Dict[str, Any]:
+def _compute_statistics(df: pd.DataFrame) -> dict[str, Any]:
     stats = {
         "total_records": len(df),
         "with_website": int((df["website"].str.len() >= 3).sum()),
@@ -317,7 +345,7 @@ def _compute_statistics(df: pd.DataFrame) -> Dict[str, Any]:
     return stats
 
 
-def _print_stats(stats: Dict[str, Any]) -> None:
+def _print_stats(stats: dict[str, Any]) -> None:
     print("\n" + "=" * 50)
     print("   MERGE STATISTICS")
     print("=" * 50)
@@ -337,9 +365,9 @@ def _print_stats(stats: Dict[str, Any]) -> None:
     print("=" * 50)
 
 
-def scan_source_files() -> Dict[str, List[Path]]:
-    found: Dict[str, List[Path]] = {}
-    for source, directory in SOURCE_DIRS.items():
+def scan_source_files() -> dict[str, list[Path]]:
+    found: dict[str, list[Path]] = {}
+    for source, directory in _get_source_dirs().items():
         if directory.exists():
             files = sorted(directory.glob("*.csv"))
             if source == "linkedin":
@@ -355,7 +383,7 @@ def scan_source_files() -> Dict[str, List[Path]]:
     return found
 
 
-async def run_merge_engine(logger) -> bool:
+async def run_merge_engine(logger, confirm: bool = False) -> bool:
     _set_logger(logger)
     logger.info("=" * 50)
     logger.info("Master Merge Engine started")
@@ -377,19 +405,21 @@ async def run_merge_engine(logger) -> bool:
             size_kb = f.stat().st_size / 1024
             print(f"   [{source.upper():<10s}] {f.name} ({size_kb:.1f} KB)")
 
-    confirm = input("\nProceed with merge? (y/n): ").strip().lower()
-    if confirm != "y":
-        print("Cancelled.")
-        return False
+    if not confirm:
+        confirm_resp = input("\nProceed with merge? (y/n): ").strip().lower()
+        if confirm_resp != "y":
+            print("Cancelled.")
+            return False
 
-    all_frames: List[pd.DataFrame] = []
+    all_frames: list[pd.DataFrame] = []
     total_raw = 0
     total_corrupted = 0
 
     for source_key, files in source_files.items():
         logger.info("Processing source: %s", source_key)
         for fpath in files:
-            df = _read_csv_safe(fpath)
+            file_size_mb = fpath.stat().st_size / (1024 * 1024)
+            df = _read_csv_safe(fpath, chunked=file_size_mb > 50)
             if df is None or df.empty:
                 logger.warning("Empty or unreadable: %s", fpath.name)
                 total_corrupted += 1
@@ -424,7 +454,7 @@ async def run_merge_engine(logger) -> bool:
     logger.info("Statistics: %s", stats)
     _print_stats(stats)
 
-    merged_dir = _EXPORT_BASE / "merged"
+    merged_dir = _get_export_base() / "merged"
     merged_dir.mkdir(parents=True, exist_ok=True)
     output_path = merged_dir / "master_leads.csv"
 
@@ -443,3 +473,52 @@ async def run_merge_engine(logger) -> bool:
         logger.error("Failed to write master CSV: %s", e)
         print(f"\n[ERROR] Failed to write master CSV: {e}")
         return False
+
+
+def cleanup_old_exports(logger: logging.Logger, retention_days: int = 30, max_size_mb: int = 500) -> int:
+    """Remove export files older than retention_days. Returns number of files deleted."""
+    from config import BASE_DIR as cfg_base_dir
+    from config import load_config
+
+    cfg = load_config()
+    retention = cfg.get("export", {}).get("retention_days", retention_days)
+    max_size = cfg.get("export", {}).get("max_size_mb", max_size_mb)
+
+    export_root = cfg_base_dir / "exports"
+    if not export_root.exists():
+        logger.info("No exports directory found, skipping cleanup")
+        return 0
+
+    cutoff = datetime.now().timestamp() - retention * 86400
+    deleted = 0
+    total_size = 0
+
+    for ext in ("csv", "json", "parquet", "xlsx"):
+        for f in export_root.rglob(f"*.{ext}"):
+            try:
+                total_size += f.stat().st_size
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    logger.info("Deleted old export: %s", f)
+                    deleted += 1
+            except OSError as e:
+                logger.warning("Failed to process %s: %s", f, e)
+
+    size_mb = total_size / (1024 * 1024)
+    if size_mb > max_size:
+        logger.info("Export size %.1f MB exceeds limit %d MB, triggering full cleanup", size_mb, max_size)
+        files_by_age = sorted(export_root.rglob("*"), key=lambda p: p.stat().st_mtime)
+        for f in files_by_age:
+            if total_size <= max_size * 1024 * 1024:
+                break
+            try:
+                sz = f.stat().st_size
+                f.unlink()
+                total_size -= sz
+                deleted += 1
+                logger.info("Deleted oversized export: %s", f)
+            except OSError:
+                pass
+
+    logger.info("Cleanup complete: %d files deleted", deleted)
+    return deleted

@@ -3,17 +3,24 @@ import logging
 import random
 import re
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import pandas as pd
 from playwright.async_api import (
     BrowserContext,
     Page,
+)
+from playwright.async_api import (
     TimeoutError as PlaywrightTimeout,
 )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from .base import (
+    export_dataframe_to_file,
+    safe_extract_href,
+    safe_extract_text,
+)
+
+logger = logging.getLogger("scrapers.maps")
 
 PHONE_REGEX = re.compile(
     r"(\+?\d{1,3}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{1,4}[\s\-.]?\d{1,9})"
@@ -54,9 +61,10 @@ SELECTORS = {
 }
 
 
-def _build_search_url(query: str) -> str:
+def _build_search_url(query: str, cfg: dict[str, Any]) -> str:
+    base = cfg.get("scraping", {}).get("maps_base_url", "https://www.google.com/maps/search/")
     q = query.strip().lower().replace(" ", "+")
-    return f"https://www.google.com/maps/search/{q}/"
+    return f"{base}{q}/"
 
 
 async def _check_captcha(page: Page, logger) -> bool:
@@ -72,7 +80,7 @@ async def _check_captcha(page: Page, logger) -> bool:
                 logger.warning("Anti-bot detection triggered: '%s'", clue)
                 return True
     except Exception:
-        pass
+        logger.debug("Captcha check failed (page/body not ready)")
     return False
 
 
@@ -81,28 +89,34 @@ async def _get_feed_item_count(page: Page) -> int:
         items = page.locator(SELECTORS["result_items"])
         return await items.count()
     except Exception:
+        logger.debug("Failed to count feed items")
         return 0
 
 
-async def _find_feed_container(page: Page, logger) -> Optional[Any]:
+async def _find_feed_container(page: Page, logger) -> Any | None:
     try:
         feed = page.locator(SELECTORS["feed_container"])
         if await feed.count() > 0:
             logger.debug("Found feed container via role='feed'")
             return feed.first
     except Exception:
-        pass
+        logger.debug("Feed container check failed")
     return None
 
 
-async def _scroll_feed_human(page: Page, container, logger, cfg: Dict[str, Any]) -> bool:
+async def _scroll_feed_human(page: Page, container, logger, cfg: dict[str, Any]) -> bool:
     min_delay = cfg["browser"]["min_delay"]
     max_delay = cfg["browser"]["max_delay"]
 
     try:
         before_count = await _get_feed_item_count(page)
-        scroll_amount = random.randint(400, 700)
-        steps = random.randint(3, 6)
+        scraping_cfg = cfg.get("scraping", {})
+        sa_min = scraping_cfg.get("maps_scroll_amount_min", 400)
+        sa_max = scraping_cfg.get("maps_scroll_amount_max", 700)
+        ss_min = scraping_cfg.get("maps_scroll_steps_min", 3)
+        ss_max = scraping_cfg.get("maps_scroll_steps_max", 6)
+        scroll_amount = random.randint(sa_min, sa_max)
+        steps = random.randint(ss_min, ss_max)
         step_amount = scroll_amount // steps
 
         if container:
@@ -122,7 +136,7 @@ async def _scroll_feed_human(page: Page, container, logger, cfg: Dict[str, Any])
         try:
             await page.wait_for_load_state("networkidle", timeout=3000)
         except Exception:
-            pass
+            logger.debug("networkidle timed out during scroll")
 
         after_count = await _get_feed_item_count(page)
         return after_count > before_count
@@ -140,7 +154,7 @@ async def _scroll_to_top(page: Page, container, logger) -> None:
             await page.evaluate("window.scrollTo(0, 0)")
         await asyncio.sleep(0.3)
     except Exception:
-        pass
+        logger.debug("Scroll to top failed")
 
 
 async def _scroll_to_bottom(page: Page, container, logger) -> None:
@@ -153,46 +167,20 @@ async def _scroll_to_bottom(page: Page, container, logger) -> None:
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(0.5)
     except Exception:
-        pass
+        logger.debug("Scroll to bottom failed")
 
 
-async def _safe_extract_text(page: Page, parent, selector: str, logger, timeout: int = 2000) -> Optional[str]:
-    for single_sel in selector.split(", "):
-        try:
-            el = parent.locator(single_sel).first
-            if await el.count() > 0 and await el.is_visible(timeout=timeout):
-                text = (await el.inner_text()).strip()
-                if text:
-                    return text
-        except Exception:
-            continue
-    return None
-
-
-async def _safe_extract_href(page: Page, parent, selector: str, logger, timeout: int = 2000) -> Optional[str]:
-    for single_sel in selector.split(", "):
-        try:
-            el = parent.locator(single_sel).first
-            if await el.count() > 0:
-                href = await el.get_attribute("href")
-                if href and href.strip() and not href.startswith("javascript"):
-                    return href.strip()
-        except Exception:
-            continue
-    return None
-
-
-async def _get_aria_label(page: Page, parent, logger) -> Optional[str]:
+async def _get_aria_label(page: Page, parent, logger) -> str | None:
     try:
         label = await parent.get_attribute("aria-label")
         if label:
             return label.strip()
     except Exception:
-        pass
+        logger.warning("Failed to get aria-label")
     return None
 
 
-async def _extract_phone_from_text(text: str) -> Optional[str]:
+async def _extract_phone_from_text(text: str) -> str | None:
     if not text:
         return None
     match = PHONE_REGEX.search(text)
@@ -223,7 +211,7 @@ async def _extract_rating_and_reviews(page: Page, item, logger) -> tuple:
                 pass
 
     if rating is None:
-        rating_text = await _safe_extract_text(
+        rating_text = await safe_extract_text(
             page, item, SELECTORS["rating_element"], logger
         )
         if rating_text:
@@ -242,7 +230,7 @@ async def _extract_rating_and_reviews(page: Page, item, logger) -> tuple:
                         pass
 
     if reviews is None:
-        reviews_text = await _safe_extract_text(
+        reviews_text = await safe_extract_text(
             page, item, SELECTORS["reviews_element"], logger
         )
         if reviews_text:
@@ -263,10 +251,10 @@ async def _extract_rating_and_reviews(page: Page, item, logger) -> tuple:
     return rating, reviews
 
 
-async def _extract_single_item(page: Page, item, logger) -> Optional[Dict[str, Any]]:
+async def _extract_single_item(page: Page, item, logger) -> dict[str, Any] | None:
     name = None
     try:
-        name = await _safe_extract_text(
+        name = await safe_extract_text(
             page, item, SELECTORS["business_name"], logger
         )
         if not name:
@@ -275,11 +263,12 @@ async def _extract_single_item(page: Page, item, logger) -> Optional[Dict[str, A
             return None
         name = re.sub(r"\s+", " ", name).strip()
     except Exception:
+        logger.warning("Failed to extract item name")
         return None
 
-    website = await _safe_extract_href(page, item, SELECTORS["website"], logger)
+    website = await safe_extract_href(page, item, SELECTORS["website"], logger)
     rating, reviews = await _extract_rating_and_reviews(page, item, logger)
-    category = await _safe_extract_text(
+    category = await safe_extract_text(
         page, item, SELECTORS["category_element"], logger
     )
 
@@ -287,12 +276,13 @@ async def _extract_single_item(page: Page, item, logger) -> Optional[Dict[str, A
     try:
         full_text = await item.inner_text()
     except Exception:
+        logger.debug("Failed to get inner_text, trying textContent")
         try:
             full_text = await page.evaluate(
                 "el => el.textContent", item
             )
         except Exception:
-            pass
+            logger.debug("Failed to get textContent fallback")
 
     phone = None
     address = None
@@ -340,9 +330,9 @@ async def _extract_single_item(page: Page, item, logger) -> Optional[Dict[str, A
     }
 
 
-async def _extract_all_results(page: Page, logger, cfg: Dict[str, Any], seen_names: Set[str]) -> List[Dict[str, Any]]:
-    extracted: List[Dict[str, Any]] = []
-    seen_in_session: Set[str] = set()
+async def _extract_all_results(page: Page, logger, cfg: dict[str, Any], seen_names: set[str]) -> list[dict[str, Any]]:
+    extracted: list[dict[str, Any]] = []
+    seen_in_session: set[str] = set()
 
     for sel in SELECTORS["result_items"].split(", "):
         try:
@@ -375,83 +365,30 @@ async def _extract_all_results(page: Page, logger, cfg: Dict[str, Any], seen_nam
             if extracted:
                 break
         except Exception:
+            logger.warning("Selector iteration failed in extraction")
             continue
 
     seen_names.update(seen_in_session)
     return extracted
 
 
-_export_logger = logging.getLogger("scrapers.maps")
-
-
-async def _export_maps_results(data: List[Dict[str, Any]], query: str, cfg: Dict[str, Any]) -> Optional[Path]:
-    if not data:
-        return None
-
-    df = pd.DataFrame(data)
-    export_format = cfg["export"]["format"]
-    safe_query = re.sub(r"[^\w\-_]", "_", query.strip().lower())[:50]
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{ts}_maps_{safe_query}"
-    ext = export_format.strip().lower()
-    known = {"csv", "json", "parquet", "xlsx"}
-    if ext not in known:
-        _export_logger.warning("Unknown export format '%s', falling back to csv", ext)
-        ext = "csv"
-    out = BASE_DIR / "exports" / "maps" / f"{filename}.{ext}"
-
-    try:
-        if ext == "csv":
-            df.to_csv(out, index=False, encoding="utf-8-sig")
-        elif ext == "json":
-            df.to_json(out, orient="records", indent=2, force_ascii=False)
-        elif ext == "parquet":
-            df.to_parquet(out, index=False)
-        else:
-            try:
-                df.to_excel(out, index=False)
-            except Exception as xl_err:
-                _export_logger.error("XLSX export failed for maps: %s, falling back to CSV", xl_err)
-                ext = "csv"
-                out = out.with_suffix(".csv")
-                df.to_csv(out, index=False, encoding="utf-8-sig")
-        return out
-    except Exception as e:
-        _export_logger.error("Export failed for maps: %s", e)
-        return None
-
-
-async def run_maps_scraper(context: BrowserContext, logger, cfg: Dict[str, Any]) -> bool:
-    page: Optional[Page] = None
-    all_leads: List[Dict[str, Any]] = []
-    seen_names: Set[str] = set()
+async def run_maps_scraper(
+    context: BrowserContext, logger, cfg: dict[str, Any], query: str, max_cycles: int = 30
+) -> bool:
+    page: Page | None = None
+    all_leads: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    _exported_ok = False
     timeout = cfg["browser"]["timeout"]
     min_delay = cfg["browser"]["min_delay"]
     max_delay = cfg["browser"]["max_delay"]
     retry_count = cfg["browser"]["retry_count"]
 
-    print("\n" + "=" * 55)
-    print("   GOOGLE MAPS LEAD SCRAPER")
-    print("=" * 55)
-    query = input("Enter search query (e.g., 'marketing agencies in Dubai'): ").strip()
-    if not query:
-        logger.warning("Empty query provided")
-        print("[ERROR] Query cannot be empty.")
-        return False
-
-    scroll_cycles_str = input("Max scroll cycles (default 30): ").strip()
-    try:
-        max_cycles = int(scroll_cycles_str) if scroll_cycles_str else 30
-        if max_cycles < 1:
-            max_cycles = 30
-    except ValueError:
-        max_cycles = 30
-
     logger.info("Starting Maps scrape | query='%s' | max_cycles=%d", query, max_cycles)
 
     try:
         page = await context.new_page()
-        search_url = _build_search_url(query)
+        search_url = _build_search_url(query, cfg)
         logger.info("Search URL: %s", search_url)
 
         for attempt in range(1, retry_count + 1):
@@ -500,7 +437,7 @@ async def run_maps_scraper(context: BrowserContext, logger, cfg: Dict[str, Any])
                 return True
 
         logger.info("Initial item count: %d", current_count)
-        print(f"\n[INFO] Found initial results. Beginning extraction...")
+        print("\n[INFO] Found initial results. Beginning extraction...")
 
         consecutive_empty = 0
         max_empty_scrolls = 5
@@ -558,7 +495,7 @@ async def run_maps_scraper(context: BrowserContext, logger, cfg: Dict[str, Any])
             await asyncio.sleep(random.uniform(min_delay * 0.3, min_delay * 0.7))
 
         if all_leads:
-            export_path = await _export_maps_results(all_leads, query, cfg)
+            export_path = export_dataframe_to_file(pd.DataFrame(all_leads), f"maps_{query[:50]}", "maps", cfg, logger)
             if export_path:
                 logger.info("Exported %d leads to %s", len(all_leads), export_path)
                 print(f"\n[SUCCESS] Exported {len(all_leads)} leads to: {export_path}")
@@ -568,37 +505,34 @@ async def run_maps_scraper(context: BrowserContext, logger, cfg: Dict[str, Any])
         else:
             logger.info("No leads extracted")
             print("\n[INFO] No leads were extracted.")
-
+        _exported_ok = True
         return True
 
     except asyncio.CancelledError:
         logger.warning("Maps scraper interrupted by user")
-        if all_leads:
-            export_path = await _export_maps_results(all_leads, query, cfg)
-            if export_path:
-                print(f"\n[PARTIAL] Exported {len(all_leads)} leads to: {export_path}")
         print("\n[INTERRUPTED] Scraping stopped by user.")
         return False
     except PlaywrightTimeout as e:
         logger.error("Playwright timeout: %s", e)
         print(f"\n[ERROR] Timeout occurred: {e}")
-        if all_leads:
-            export_path = await _export_maps_results(all_leads, query, cfg)
-            if export_path:
-                print(f"[PARTIAL] Exported {len(all_leads)} leads to: {export_path}")
         return False
     except Exception as e:
         logger.error("Unexpected Maps scraper error: %s", e)
         print(f"\n[ERROR] Unexpected error: {e}")
-        if all_leads:
-            export_path = await _export_maps_results(all_leads, query, cfg)
-            if export_path:
-                print(f"[PARTIAL] Exported {len(all_leads)} leads to: {export_path}")
         return False
     finally:
-        if page:
+        try:
+            if not _exported_ok and isinstance(all_leads, list) and len(all_leads) > 0:
+                export_path = export_dataframe_to_file(
+                    pd.DataFrame(all_leads), f"maps_{query[:50]}", "maps", cfg, logger,
+                )
+                if export_path:
+                    print(f"\n[PARTIAL] Exported {len(all_leads)} leads to: {export_path}")
+        except Exception:
+            logger.warning("Failed to export partial data in finally block")
+    if page:
             try:
                 await page.close()
                 logger.debug("Maps scraper page closed")
             except Exception:
-                pass
+                logger.debug("Failed to close Maps page")

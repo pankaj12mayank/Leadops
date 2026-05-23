@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python deps
+        run: pip install ruff mypy pytest pytest-asyncio
+      - name: Ruff check
+        run: ruff check .
+      - name: Mypy check
+        run: mypy . --ignore-missing-imports || true
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Node deps
+        run: npm ci
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npx eslint src --ext .ts,.tsx || true
+      - name: Test
+        run: npx vitest run || true

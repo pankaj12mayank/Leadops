@@ -7,13 +7,13 @@ import { Separator } from "@/components/ui/separator";
 import { getStatus, startScraper, stopScraper, runMerge, type StatusResponse } from "@/lib/api";
 import { SCRAPERS, type ScraperDef } from "@/lib/types";
 import { toast } from "@/hooks/use-toast";
-import { Play, Merge, Loader2, ExternalLink } from "lucide-react";
+import { Play, Merge, Loader2 } from "lucide-react";
 import { ErrorState } from "@/components/shared/ErrorState";
 
 export default function Scrapers() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [inputs, setInputs] = useState<Record<string, Record<string, string>>>({});
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [runningScrapers, setRunningScrapers] = useState<Set<string>>(new Set());
   const pollingRef = useRef(false);
@@ -126,8 +126,9 @@ export default function Scrapers() {
             <CardContent className="space-y-3">
               {scraper.inputs.map((inp) => (
                 <div key={inp.key}>
-                  <label className="text-xs text-muted-foreground mb-1 block">{inp.label}</label>
+                  <label className="text-xs text-muted-foreground mb-1 block" htmlFor={`scraper-${scraper.id}-${inp.key}`}>{inp.label}</label>
                   <Input
+                    id={`scraper-${scraper.id}-${inp.key}`}
                     placeholder={inp.defaultValue || `Enter ${inp.label.toLowerCase()}`}
                     value={getInput(scraper, inp.key)}
                     onChange={(e) => setInput(scraper.id, inp.key, e.target.value)}
@@ -141,6 +142,7 @@ export default function Scrapers() {
                   size="sm"
                   disabled={isRunning(scraper.id)}
                   onClick={() => handleStart(scraper)}
+                  aria-label={`Start ${scraper.label}`}
                 >
                   <Play className="h-4 w-4 mr-2" /> Start
                 </Button>
@@ -150,6 +152,7 @@ export default function Scrapers() {
                     size="sm"
                     variant="destructive"
                     onClick={() => handleStop(scraper)}
+                    aria-label={`Stop ${scraper.label}`}
                   >
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Stop
                   </Button>
@@ -172,6 +175,7 @@ export default function Scrapers() {
             variant="secondary"
             disabled={isRunning("merge")}
             onClick={handleMerge}
+            aria-label="Run merge all leads"
           >
             {isRunning("merge") ? (
               <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Merging...</>

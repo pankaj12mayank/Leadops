@@ -119,7 +119,7 @@ export default function Exports() {
             {data.length} files &middot; {formatSize(totalSize)} total
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={load} disabled={loading} aria-label="Refresh exports list">
           <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
@@ -264,7 +264,7 @@ export default function Exports() {
                     <TableCell>
                       <div className="flex items-center justify-end gap-1">
                         <a href={getExportDownloadUrl(file)} download>
-                          <Button variant="ghost" size="icon" className="h-7 w-7">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Download ${file.filename}`}>
                             <Download className="h-3.5 w-3.5" />
                           </Button>
                         </a>
@@ -274,6 +274,7 @@ export default function Exports() {
                           className="h-7 w-7 text-red-400 hover:text-red-300 hover:bg-red-500/10"
                           disabled={deleting.has(file.path)}
                           onClick={() => handleDelete(file)}
+                          aria-label={`Delete ${file.filename}`}
                         >
                           {deleting.has(file.path) ? (
                             <RefreshCw className="h-3.5 w-3.5 animate-spin" />

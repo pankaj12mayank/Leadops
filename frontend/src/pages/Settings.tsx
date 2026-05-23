@@ -39,7 +39,7 @@ function validateConfig(cfg: SystemConfig): string[] {
   if (cfg.browser.min_delay < 0) errors.push("Min delay cannot be negative");
   if (cfg.browser.max_delay <= cfg.browser.min_delay) errors.push("Max delay must be greater than min delay");
   if (cfg.browser.concurrency < 1) errors.push("Concurrency must be at least 1");
-  if (!["csv", "xlsx"].includes(cfg.export.format)) errors.push("Export format must be csv or xlsx");
+  if (!["csv", "json", "parquet", "xlsx"].includes(cfg.export.format)) errors.push("Export format must be csv, json, parquet, or xlsx");
   return errors;
 }
 
@@ -227,6 +227,8 @@ export default function Settings() {
                   className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm"
                 >
                   <option value="csv">CSV</option>
+                  <option value="json">JSON</option>
+                  <option value="parquet">Parquet</option>
                   <option value="xlsx">XLSX</option>
                 </select>
               </FieldRow>

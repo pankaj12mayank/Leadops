@@ -1,11 +1,11 @@
 {
     "browser": {
         "headless": true,
-        "timeout": 5000,
-        "retry_count": 2,
+        "timeout": 30000,
+        "retry_count": 3,
         "min_delay": 1.0,
-        "max_delay": 5.0,
-        "concurrency": 2,
+        "max_delay": 3.0,
+        "concurrency": 1,
         "viewport_width": 1920,
         "viewport_height": 1080,
         "user_agent": "",
@@ -14,19 +14,43 @@
         "geolocation": {
             "latitude": 40.7,
             "longitude": -74.0
-        }
+        },
+        "bypass_csp": false,
+        "ignore_https_errors": false,
+        "connection_timeout": 30,
+        "keep_alive": true
     },
     "session": {
         "storage_path": "sessions",
         "state_file": "auth_state.json",
         "auto_save": true
     },
+    "scraping": {
+        "max_pages": 5,
+        "max_scroll_cycles": 30,
+        "scroll_steps": 10,
+        "scroll_delay": 0.35,
+        "consecutive_empty_scrolls": 5,
+        "extraction_retries": 2,
+        "page_delay_multiplier": 2.0,
+        "clutch_base_url": "https://clutch.co/search?q=",
+        "goodfirms_base_url": "https://www.goodfirms.co/search?q=",
+        "maps_base_url": "https://www.google.com/maps/search/",
+        "linkedin_min_company_delay": 4.0,
+        "linkedin_max_company_delay": 7.0,
+        "linkedin_min_page_delay": 2.0,
+        "linkedin_max_page_delay": 4.0,
+        "maps_scroll_amount_min": 400,
+        "maps_scroll_amount_max": 700,
+        "maps_scroll_steps_min": 3,
+        "maps_scroll_steps_max": 6
+    },
     "export": {
         "format": "csv",
         "encoding": "utf-8-sig"
     },
     "logging": {
-        "level": "WARN",
+        "level": "WARNING",
         "file": "logs/system.log",
         "max_bytes": 10485760,
         "backup_count": 5,
@@ -37,5 +61,11 @@
         "screenshots": "screenshots",
         "temp": "temp",
         "sessions": "sessions"
+    },
+    "api": {
+        "api_key": "",
+        "allowed_origins": ["http://localhost:5173", "http://localhost:4173"],
+        "host": "127.0.0.1",
+        "port": 8000
     }
 }

@@ -4,16 +4,25 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import pandas as pd
 from playwright.async_api import (
     BrowserContext,
     Page,
+)
+from playwright.async_api import (
     TimeoutError as PlaywrightTimeout,
 )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from .base import (
+    BASE_DIR,
+    export_dataframe_to_file,
+    safe_extract_attribute,
+    safe_extract_text,
+)
+
+logger = logging.getLogger("scrapers.linkedin")
 
 FOUNDER_REGEX = re.compile(
     r"(?:Founded|Co-founded|Founder|Founded by|Co-founded by)\s*[:\-]?\s*([^.!]*)",
@@ -88,7 +97,7 @@ def _build_company_page_url(slug: str) -> str:
     return f"https://www.linkedin.com/company/{slug}/"
 
 
-def _extract_company_slug(url: str) -> Optional[str]:
+def _extract_company_slug(url: str) -> str | None:
     match = re.search(r"linkedin\.com/company/([^/?]+)", url)
     if match:
         return match.group(1)
@@ -115,7 +124,7 @@ def _parse_founder_info(text: str) -> tuple:
     return fragment, None
 
 
-def _parse_company_size(text: str) -> Optional[str]:
+def _parse_company_size(text: str) -> str | None:
     if not text:
         return None
     match = SIZE_REGEX.search(text)
@@ -127,7 +136,7 @@ def _parse_company_size(text: str) -> Optional[str]:
     return text.strip() if any(c.isdigit() for c in text) else None
 
 
-async def _check_linkedin_barriers(page: Page, logger) -> Optional[str]:
+async def _check_linkedin_barriers(page: Page, logger) -> str | None:
     try:
         body_text = await page.locator("body").inner_text(timeout=5000)
         body_lower = body_text.lower()
@@ -138,7 +147,7 @@ async def _check_linkedin_barriers(page: Page, logger) -> Optional[str]:
             logger.warning("LinkedIn login wall detected")
             return "login_required"
     except Exception:
-        pass
+        logger.debug("Failed to check LinkedIn body text for barriers")
     try:
         for sel in SELECTORS["login_wall"].split(", "):
             el = page.locator(sel).first
@@ -146,7 +155,7 @@ async def _check_linkedin_barriers(page: Page, logger) -> Optional[str]:
                 logger.warning("Login wall element found: %s", sel)
                 return "login_required"
     except Exception:
-        pass
+        logger.debug("Failed to check login wall elements")
     try:
         current_url = page.url.lower()
         if "signup" in current_url or "sign_in" in current_url or "login" in current_url:
@@ -156,43 +165,17 @@ async def _check_linkedin_barriers(page: Page, logger) -> Optional[str]:
             logger.warning("LinkedIn challenge page: %s", current_url)
             return "challenge"
     except Exception:
-        pass
-    return None
-
-
-async def _safe_extract_attribute(page: Page, parent, selector: str, attr: str, logger, timeout: int = 2000) -> Optional[str]:
-    for single_sel in selector.split(", "):
-        try:
-            el = parent.locator(single_sel).first
-            if await el.count() > 0:
-                val = await el.get_attribute(attr)
-                if val:
-                    return val.strip()
-        except Exception:
-            continue
-    return None
-
-
-async def _safe_extract_text(page: Page, parent, selector: str, logger, timeout: int = 2000) -> Optional[str]:
-    for single_sel in selector.split(", "):
-        try:
-            el = parent.locator(single_sel).first
-            if await el.count() > 0 and await el.is_visible(timeout=timeout):
-                text = (await el.inner_text()).strip()
-                if text:
-                    return text
-        except Exception:
-            continue
+        logger.debug("Failed to check URL for barriers")
     return None
 
 
 async def _enrich_company(
     page: Page,
     company_name: str,
-    website: Optional[str],
+    website: str | None,
     logger,
-    cfg: Dict[str, Any],
-) -> Dict[str, Any]:
+    cfg: dict[str, Any],
+) -> dict[str, Any]:
     timeout = cfg["browser"]["timeout"]
     retry_count = cfg["browser"]["retry_count"]
 
@@ -221,7 +204,7 @@ async def _enrich_company(
             try:
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
-                pass
+                logger.debug("networkidle timeout during search navigation")
             break
         except Exception as e:
             logger.warning("Search navigation attempt %d failed: %s", attempt, e)
@@ -238,7 +221,6 @@ async def _enrich_company(
         return result
 
     company_url = None
-    company_slug = None
 
     for sel in SELECTORS["search_result_link"].split(", "):
         try:
@@ -247,10 +229,11 @@ async def _enrich_company(
                 href = await link_el.get_attribute("href")
                 if href and "/company/" in href:
                     company_url = href.split("?")[0].rstrip("/") + "/"
-                    company_slug = _extract_company_slug(company_url)
+                    _extract_company_slug(company_url)
                     logger.info("Found company link: %s", company_url)
                     break
         except Exception:
+            logger.warning("Failed to check search result link")
             continue
 
     if not company_url:
@@ -262,7 +245,11 @@ async def _enrich_company(
     result["enrichment_status"] = "found_url"
     result["matched_company_name"] = search_name
 
-    delay = random.uniform(4.0, 7.0)
+    sc = cfg.get("scraping", {})
+    delay = random.uniform(
+        sc.get("linkedin_min_company_delay", 4.0),
+        sc.get("linkedin_max_company_delay", 7.0),
+    )
     logger.info("Waiting %.1f seconds before navigating to company page", delay)
     await asyncio.sleep(delay)
 
@@ -274,7 +261,7 @@ async def _enrich_company(
             try:
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
-                pass
+                logger.debug("networkidle timeout during company navigation")
             logger.info("Loaded company page: %s", company_url)
             break
         except Exception as e:
@@ -291,25 +278,29 @@ async def _enrich_company(
         result["enrichment_status"] = barrier
         return result
 
-    await asyncio.sleep(random.uniform(2.0, 4.0))
+    sc = cfg.get("scraping", {})
+    await asyncio.sleep(random.uniform(
+        sc.get("linkedin_min_page_delay", 2.0),
+        sc.get("linkedin_max_page_delay", 4.0),
+    ))
 
     try:
-        matched_name = await _safe_extract_text(page, page, SELECTORS["company_name"], logger)
+        matched_name = await safe_extract_text(page, page, SELECTORS["company_name"], logger)
         if matched_name:
             result["matched_company_name"] = matched_name
             logger.info("Matched company name: %s", matched_name)
     except Exception:
-        pass
+        logger.warning("Failed to extract matched company name")
 
     about_text = None
     try:
-        about_text = await _safe_extract_text(page, page, SELECTORS["company_about"], logger)
+        about_text = await safe_extract_text(page, page, SELECTORS["company_about"], logger)
         if not about_text:
-            about_text = await _safe_extract_attribute(
+            about_text = await safe_extract_attribute(
                 page, page, SELECTORS["meta_description"], "content", logger
             )
     except Exception:
-        pass
+        logger.warning("Failed to extract about text")
 
     if about_text:
         founder_name, founder_role = _parse_founder_info(about_text)
@@ -319,14 +310,14 @@ async def _enrich_company(
             logger.info("Found founder: %s (%s)", founder_name, founder_role or "N/A")
 
     try:
-        size_text = await _safe_extract_text(page, page, SELECTORS["company_size"], logger)
+        size_text = await safe_extract_text(page, page, SELECTORS["company_size"], logger)
         if size_text:
             parsed_size = _parse_company_size(size_text)
             if parsed_size:
                 result["company_size_from_linkedin"] = parsed_size
                 logger.info("Found company size: %s", parsed_size)
     except Exception:
-        pass
+        logger.warning("Failed to extract company size")
 
     if about_text:
         for pattern in [r"(\d[\d,]*\s*-\s*\d[\d,]*)\s+employees", r"(\d[\d,]*\+?)\s+employees"]:
@@ -339,61 +330,14 @@ async def _enrich_company(
     return result
 
 
-_export_logger = logging.getLogger("scrapers.linkedin")
-
-
-async def _export_linkedin_enrichment(data: List[Dict[str, Any]], cfg: Dict[str, Any]) -> Optional[Path]:
-    if not data:
-        return None
-    df = pd.DataFrame(data)
-    export_format = cfg["export"]["format"]
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{ts}_linkedin_enrichment"
-    ext = export_format.strip().lower()
-    known = {"csv", "json", "parquet", "xlsx"}
-    if ext not in known:
-        _export_logger.warning("Unknown export format '%s', falling back to csv", ext)
-        ext = "csv"
-    out = BASE_DIR / "exports" / "linkedin" / f"{filename}.{ext}"
-    try:
-        if ext == "csv":
-            df.to_csv(out, index=False, encoding="utf-8-sig")
-        elif ext == "json":
-            df.to_json(out, orient="records", indent=2, force_ascii=False)
-        elif ext == "parquet":
-            df.to_parquet(out, index=False)
-        else:
-            try:
-                df.to_excel(out, index=False)
-            except Exception as xl_err:
-                _export_logger.error("XLSX export failed for linkedin: %s, falling back to CSV", xl_err)
-                ext = "csv"
-                out = out.with_suffix(".csv")
-                df.to_csv(out, index=False, encoding="utf-8-sig")
-        return out
-    except Exception as e:
-        _export_logger.error("Export failed for linkedin: %s", e)
-        return None
-
-
-async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str, Any]) -> bool:
-    page: Optional[Page] = None
-    all_results: List[Dict[str, Any]] = []
-    csv_path = BASE_DIR / "exports" / "linkedin" / "input_companies.csv"
-
-    print("\n" + "=" * 55)
-    print("   LINKEDIN COMPANY ENRICHMENT")
-    print("=" * 55)
-    print("   Lightweight enrichment — safe, slow, logged-in session only.")
-    print("   Reads companies from a CSV file and enriches with LinkedIn data.")
-    print()
-
-    input_csv = input(
-        f"Path to CSV with companies (default: {csv_path}): "
-    ).strip()
-    if not input_csv:
-        input_csv = str(csv_path)
-    input_path = Path(input_csv)
+async def run_linkedin_enrichment(
+    context: BrowserContext, logger, cfg: dict[str, Any], csv_path: Path | None = None
+) -> bool:
+    page: Page | None = None
+    all_results: list[dict[str, Any]] = []
+    if csv_path is None:
+        csv_path = BASE_DIR / "exports" / "linkedin" / "input_companies.csv"
+    input_path = csv_path
 
     if not input_path.exists():
         print(f"\n[ERROR] File not found: {input_path}")
@@ -428,11 +372,6 @@ async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str
     print(f"\n[INFO] Loaded {total} companies from {input_path}")
     print(f"[INFO] Name column: '{name_col}'" + (f", Website column: '{website_col}'" if website_col else ""))
 
-    confirm = input("\nProceed with enrichment? (y/n): ").strip().lower()
-    if confirm != "y":
-        print("Cancelled.")
-        return False
-
     logger.info("Starting LinkedIn enrichment for %d companies", total)
     print("\nStarting LinkedIn enrichment. This will run slowly on purpose.")
 
@@ -466,7 +405,7 @@ async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str
                 if result["company_size_from_linkedin"]:
                     print(f"  [OK] Size: {result['company_size_from_linkedin']}")
             elif result["enrichment_status"] == "not_found":
-                print(f"  [SKIP] No LinkedIn company page found")
+                print("  [SKIP] No LinkedIn company page found")
             elif result["enrichment_status"] in ("login_required", "rate_limit", "challenge"):
                 logger.warning("LinkedIn barrier at company %d: %s", idx, result["enrichment_status"])
                 print(f"\n[STOP] LinkedIn {result['enrichment_status']} detected.")
@@ -475,7 +414,7 @@ async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str
                 elif result["enrichment_status"] == "rate_limit":
                     print("       LinkedIn rate-limited the request. Wait and try again later.")
                 else:
-                    print(f"       LinkedIn challenge page. Complete it in the browser.")
+                    print("       LinkedIn challenge page. Complete it in the browser.")
                 break
             else:
                 print(f"  [SKIP] {result['enrichment_status']}")
@@ -494,7 +433,9 @@ async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str
         print(f"{'=' * 50}")
 
         if all_results:
-            export_path = await _export_linkedin_enrichment(all_results, cfg)
+            export_path = export_dataframe_to_file(
+                pd.DataFrame(all_results), "linkedin_enrichment", "linkedin", cfg, logger,
+            )
             if export_path:
                 logger.info("Exported %d results to %s", len(all_results), export_path)
                 print(f"\n[SUCCESS] Exported {len(all_results)} results to: {export_path}")
@@ -510,7 +451,9 @@ async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str
     except asyncio.CancelledError:
         logger.warning("LinkedIn enrichment interrupted by user")
         if all_results:
-            export_path = await _export_linkedin_enrichment(all_results, cfg)
+            export_path = export_dataframe_to_file(
+                pd.DataFrame(all_results), "linkedin_enrichment", "linkedin", cfg, logger,
+            )
             if export_path:
                 print(f"\n[PARTIAL] Exported {len(all_results)} results to: {export_path}")
         print("\n[INTERRUPTED] Enrichment stopped by user.")
@@ -519,7 +462,9 @@ async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str
         logger.error("Playwright timeout: %s", e)
         print(f"\n[ERROR] Timeout occurred: {e}")
         if all_results:
-            export_path = await _export_linkedin_enrichment(all_results, cfg)
+            export_path = export_dataframe_to_file(
+                pd.DataFrame(all_results), "linkedin_enrichment", "linkedin", cfg, logger,
+            )
             if export_path:
                 print(f"[PARTIAL] Exported {len(all_results)} results to: {export_path}")
         return False
@@ -527,7 +472,9 @@ async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str
         logger.error("Unexpected LinkedIn enrichment error: %s", e)
         print(f"\n[ERROR] Unexpected error: {e}")
         if all_results:
-            export_path = await _export_linkedin_enrichment(all_results, cfg)
+            export_path = export_dataframe_to_file(
+                pd.DataFrame(all_results), "linkedin_enrichment", "linkedin", cfg, logger,
+            )
             if export_path:
                 print(f"[PARTIAL] Exported {len(all_results)} results to: {export_path}")
         return False
@@ -537,4 +484,4 @@ async def run_linkedin_enrichment(context: BrowserContext, logger, cfg: Dict[str
                 await page.close()
                 logger.debug("LinkedIn enrichment page closed")
             except Exception:
-                pass
+                logger.debug("Failed to close LinkedIn page")

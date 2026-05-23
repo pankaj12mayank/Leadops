@@ -1,13 +1,11 @@
 import asyncio
 import json
 import logging
-import logging.handlers
-import os
 import random
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pandas as pd
 from playwright.async_api import (
@@ -17,161 +15,55 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from config import (
+    BASE_DIR,
+    CONFIG_PATH,
+    ensure_directories,
+    get_session_encrypt_key,
+    load_config,
+    setup_logging,
+)
 from scrapers.clutch import run_clutch_scraper
 from scrapers.goodfirms import run_goodfirms_scraper
-from scrapers.maps import run_maps_scraper
 from scrapers.linkedin import run_linkedin_enrichment
-from scrapers.merge import run_merge_engine
+from scrapers.maps import run_maps_scraper
+from scrapers.merge import cleanup_old_exports, run_merge_engine
+from session_encrypt import decrypt_state, encrypt_state, make_key_from_secret
 
-BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "config.json"
-CONFIG_BACKUP_PATH = BASE_DIR / "config.backup.json"
-
-_DEFAULT_CONFIG = {
-    "browser": {
-        "headless": False,
-        "timeout": 30000,
-        "retry_count": 3,
-        "min_delay": 1.0,
-        "max_delay": 3.0,
-        "concurrency": 1,
-        "viewport_width": 1920,
-        "viewport_height": 1080,
-        "user_agent": "",
-        "locale": "en-US",
-        "timezone_id": "America/New_York",
-        "geolocation": {"latitude": 40.7128, "longitude": -74.006},
-    },
-    "session": {
-        "storage_path": "sessions",
-        "state_file": "auth_state.json",
-        "auto_save": True,
-    },
-    "export": {
-        "format": "csv",
-        "encoding": "utf-8-sig",
-    },
-    "logging": {
-        "level": "INFO",
-        "file": "logs/system.log",
-        "max_bytes": 10485760,
-        "backup_count": 5,
-        "format": "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    },
-    "paths": {
-        "exports": "exports",
-        "screenshots": "screenshots",
-        "temp": "temp",
-        "sessions": "sessions",
-    },
-}
-
-REQUIRED_DIRS = [
-    BASE_DIR / "sessions",
-    BASE_DIR / "exports" / "clutch",
-    BASE_DIR / "exports" / "goodfirms",
-    BASE_DIR / "exports" / "linkedin",
-    BASE_DIR / "exports" / "maps",
-    BASE_DIR / "exports" / "merged",
-    BASE_DIR / "logs",
-    BASE_DIR / "screenshots",
-    BASE_DIR / "temp",
-]
-
-_playwright_instance: Optional[Playwright] = None
-_browser_context: Optional[BrowserContext] = None
-_logger: Optional[logging.Logger] = None
+_playwright_instance: Playwright | None = None
+_browser_context: BrowserContext | None = None
+_logger: logging.Logger | None = None
 
 
-def _ensure_directories() -> None:
-    for d in REQUIRED_DIRS:
-        d.mkdir(parents=True, exist_ok=True)
+def _validate_query(query: str) -> str | None:
+    if not query:
+        return "Search query cannot be empty"
+    if len(query) > 200:
+        return "Search query must be 200 characters or fewer"
+    if any(ord(c) < 32 for c in query):
+        return "Search query contains invalid control characters"
+    return None
 
 
-def _load_config() -> Dict[str, Any]:
+def _validate_page_count(value: str, label: str, minimum: int = 1, maximum: int = 100) -> str | None:
+    if not value:
+        return None
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        return cfg
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError) as e:
-        if _logger:
-            _logger.warning("Config load failed (%s), trying backup", e)
-        try:
-            with open(CONFIG_BACKUP_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            if _logger:
-                _logger.info("Config recovered from backup")
-            return cfg
-        except Exception:
-            if _logger:
-                _logger.warning("Backup also failed, using defaults")
-            return dict(_DEFAULT_CONFIG)
-
-
-class _SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            super().emit(record)
-        except Exception:
-            try:
-                sys.stderr.write(f"Log write failed: {self.baseFilename}\n")
-            except Exception:
-                pass
-
-
-def _setup_logging() -> logging.Logger:
-    log_dir = BASE_DIR / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    logger = logging.getLogger("lead_system")
-    logger.setLevel(logging.DEBUG)
-
-    if logger.handlers:
-        return logger
-
-    try:
-        cfg = _load_config()
-        log_cfg = cfg.get("logging", {})
-        log_level = log_cfg.get("level", "INFO")
-        log_file_cfg = log_cfg.get("file", "logs/system.log")
-        log_format = log_cfg.get(
-            "format",
-            "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        )
-    except Exception:
-        log_level = "INFO"
-        log_file_cfg = "logs/system.log"
-        log_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-
-    log_file = BASE_DIR / log_file_cfg
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-
-    fmt = logging.Formatter(log_format, datefmt="%Y-%m-%d %H:%M:%S")
-
-    rfh = _SafeRotatingFileHandler(
-        filename=str(log_file),
-        maxBytes=10_485_760,
-        backupCount=5,
-        encoding="utf-8",
-    )
-    rfh.setLevel(getattr(logging, log_level.upper(), logging.DEBUG))
-    rfh.setFormatter(fmt)
-
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(fmt)
-
-    logger.addHandler(rfh)
-    logger.addHandler(ch)
-
-    return logger
+        n = int(value)
+    except ValueError:
+        return f"{label} must be a valid number"
+    if n < minimum:
+        return f"{label} cannot be less than {minimum}"
+    if n > maximum:
+        return f"{label} cannot exceed {maximum}"
+    return None
 
 
 async def _random_delay(min_sec: float, max_sec: float) -> None:
     await asyncio.sleep(random.uniform(min_sec, max_sec))
 
 
-async def _safe_goto(page: Page, url: str, cfg: Dict[str, Any], retries: int = None) -> bool:
+async def _safe_goto(page: Page, url: str, cfg: dict[str, Any], retries: int = None) -> bool:
     if retries is None:
         retries = cfg["browser"]["retry_count"]
     timeout = cfg["browser"]["timeout"]
@@ -189,7 +81,7 @@ async def _safe_goto(page: Page, url: str, cfg: Dict[str, Any], retries: int = N
     return False
 
 
-async def _save_screenshot(page: Page, label: str = "screenshot") -> Optional[Path]:
+async def _save_screenshot(page: Page, label: str = "screenshot") -> Path | None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label)
     path = BASE_DIR / "screenshots" / f"{ts}_{safe_label}.png"
@@ -205,7 +97,7 @@ async def _save_screenshot(page: Page, label: str = "screenshot") -> Optional[Pa
 _export_df_logger = logging.getLogger("main.export")
 
 
-def _export_dataframe(df: pd.DataFrame, filename: str, export_format: str) -> Optional[Path]:
+def _export_dataframe(df: pd.DataFrame, filename: str, export_format: str) -> Path | None:
     if df.empty:
         _export_df_logger.warning("DataFrame is empty, skipping export for %s", filename)
         return None
@@ -239,7 +131,7 @@ def _export_dataframe(df: pd.DataFrame, filename: str, export_format: str) -> Op
         return None
 
 
-async def _create_context(playwright: Playwright, cfg: Dict[str, Any]) -> BrowserContext:
+async def _create_context(playwright: Playwright, cfg: dict[str, Any]) -> BrowserContext:
     state_path = BASE_DIR / cfg["session"]["storage_path"] / cfg["session"]["state_file"]
     geo = cfg["browser"].get("geolocation", {})
 
@@ -252,15 +144,22 @@ async def _create_context(playwright: Playwright, cfg: Dict[str, Any]) -> Browse
         timezone_id=cfg["browser"]["timezone_id"],
         geolocation={"latitude": geo.get("latitude", 40.7128), "longitude": geo.get("longitude", -74.0060)},
         permissions=["geolocation"],
-        bypass_csp=True,
-        ignore_https_errors=True,
+        bypass_csp=cfg["browser"].get("bypass_csp", False),
+        ignore_https_errors=cfg["browser"].get("ignore_https_errors", False),
         no_viewport=False,
     )
 
     if state_path.exists():
         try:
-            with open(state_path, "r", encoding="utf-8") as f:
-                storage_state = json.load(f)
+            raw = state_path.read_text(encoding="utf-8")
+            enc_key_secret = get_session_encrypt_key()
+            storage_state = None
+            if enc_key_secret:
+                key = make_key_from_secret(enc_key_secret)
+                if key:
+                    storage_state = decrypt_state(raw, key)
+            if storage_state is None:
+                storage_state = json.loads(raw)
             await context.add_cookies(storage_state.get("cookies", []))
             _logger.info("Session state loaded from %s", state_path)
         except Exception as e:
@@ -271,20 +170,30 @@ async def _create_context(playwright: Playwright, cfg: Dict[str, Any]) -> Browse
     return context
 
 
-async def _save_session_state(context: BrowserContext, cfg: Dict[str, Any]) -> None:
+async def _save_session_state(context: BrowserContext, cfg: dict[str, Any]) -> None:
     state_path = BASE_DIR / cfg["session"]["storage_path"] / cfg["session"]["state_file"]
     try:
         cookies = await context.cookies()
         state = {"cookies": cookies, "origins": []}
         state_path.parent.mkdir(parents=True, exist_ok=True)
+
+        enc_key_secret = get_session_encrypt_key()
+        if enc_key_secret:
+            key = make_key_from_secret(enc_key_secret)
+            if key:
+                encrypted = encrypt_state(state, key)
+                state_path.write_text(encrypted, encoding="utf-8")
+                _logger.info("Session state encrypted and saved to %s", state_path)
+                return
+
         with open(state_path, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
-        _logger.info("Session state saved to %s", state_path)
+        _logger.info("Session state saved to %s (unencrypted)", state_path)
     except Exception as e:
         _logger.error("Failed to save session state: %s", e)
 
 
-async def _manual_login(context: BrowserContext, cfg: Dict[str, Any]) -> bool:
+async def _manual_login(context: BrowserContext, cfg: dict[str, Any]) -> bool:
     page = await context.new_page()
     try:
         await page.goto("https://www.google.com", timeout=cfg["browser"]["timeout"])
@@ -316,7 +225,7 @@ async def _manual_login(context: BrowserContext, cfg: Dict[str, Any]) -> bool:
         await page.close()
 
 
-async def setup_browser_session(cfg: Dict[str, Any]) -> bool:
+async def setup_browser_session(cfg: dict[str, Any]) -> bool:
     global _playwright_instance, _browser_context, _logger
 
     _logger.info("Starting browser session setup...")
@@ -338,7 +247,7 @@ async def shutdown() -> None:
 
     if _browser_context:
         try:
-            cfg = _load_config()
+            cfg = load_config()
             if cfg["session"]["auto_save"]:
                 await _save_session_state(_browser_context, cfg)
             await _browser_context.close()
@@ -360,7 +269,7 @@ async def shutdown() -> None:
     _logger.info("Shutdown complete")
 
 
-async def _menu_setup_browser_session(cfg: Dict[str, Any]) -> None:
+async def _menu_setup_browser_session(cfg: dict[str, Any]) -> None:
     success = await setup_browser_session(cfg)
     if not success:
         print("\n[FAILED] Could not create browser session.")
@@ -378,7 +287,7 @@ async def _menu_setup_browser_session(cfg: Dict[str, Any]) -> None:
     input("\nPress Enter to return to menu...")
 
 
-async def _menu_run_clutch(cfg: Dict[str, Any]) -> None:
+async def _menu_run_clutch(cfg: dict[str, Any]) -> None:
     if not _browser_context:
         print("\n[ERROR] No active browser session. Please run option 1 first.")
         _logger.warning("Clutch scraper requested but no browser session active")
@@ -389,9 +298,22 @@ async def _menu_run_clutch(cfg: Dict[str, Any]) -> None:
     print("   CLUTCH.CO SCRAPER")
     print("=" * 55)
     print("   Using existing browser session.")
+    query = input("Enter search query (e.g., 'marketing agencies USA'): ").strip()
+    qe = _validate_query(query)
+    if qe:
+        print(f"[ERROR] {qe}.")
+        input("\nPress Enter to return to menu...")
+        return
+    max_pages_str = input("Max pages to scrape (default 5): ").strip()
+    pe = _validate_page_count(max_pages_str, "Max pages")
+    if pe:
+        print(f"[ERROR] {pe}. Using default of 5.")
+        max_pages = 5
+    else:
+        max_pages = int(max_pages_str) if max_pages_str else 5
     _logger.info("Launching Clutch.co scraper")
 
-    success = await run_clutch_scraper(_browser_context, _logger, cfg)
+    success = await run_clutch_scraper(_browser_context, _logger, cfg, query, max_pages)
 
     if success:
         _logger.info("Clutch scraper completed successfully")
@@ -403,7 +325,7 @@ async def _menu_run_clutch(cfg: Dict[str, Any]) -> None:
     input("\nPress Enter to return to menu...")
 
 
-async def _menu_run_goodfirms(cfg: Dict[str, Any]) -> None:
+async def _menu_run_goodfirms(cfg: dict[str, Any]) -> None:
     if not _browser_context:
         print("\n[ERROR] No active browser session. Please run option 1 first.")
         _logger.warning("GoodFirms scraper requested but no browser session active")
@@ -414,9 +336,22 @@ async def _menu_run_goodfirms(cfg: Dict[str, Any]) -> None:
     print("   GOODFIRMS.CO SCRAPER")
     print("=" * 55)
     print("   Using existing browser session.")
+    query = input("Enter search query (e.g., 'software companies USA'): ").strip()
+    qe = _validate_query(query)
+    if qe:
+        print(f"[ERROR] {qe}.")
+        input("\nPress Enter to return to menu...")
+        return
+    max_pages_str = input("Max pages to scrape (default 5): ").strip()
+    pe = _validate_page_count(max_pages_str, "Max pages")
+    if pe:
+        print(f"[ERROR] {pe}. Using default of 5.")
+        max_pages = 5
+    else:
+        max_pages = int(max_pages_str) if max_pages_str else 5
     _logger.info("Launching GoodFirms.co scraper")
 
-    success = await run_goodfirms_scraper(_browser_context, _logger, cfg)
+    success = await run_goodfirms_scraper(_browser_context, _logger, cfg, query, max_pages)
 
     if success:
         _logger.info("GoodFirms scraper completed successfully")
@@ -428,7 +363,7 @@ async def _menu_run_goodfirms(cfg: Dict[str, Any]) -> None:
     input("\nPress Enter to return to menu...")
 
 
-async def _menu_run_maps(cfg: Dict[str, Any]) -> None:
+async def _menu_run_maps(cfg: dict[str, Any]) -> None:
     if not _browser_context:
         print("\n[ERROR] No active browser session. Please run option 1 first.")
         _logger.warning("Maps scraper requested but no browser session active")
@@ -439,9 +374,22 @@ async def _menu_run_maps(cfg: Dict[str, Any]) -> None:
     print("   GOOGLE MAPS SCRAPER")
     print("=" * 55)
     print("   Using existing browser session.")
+    query = input("Enter search query (e.g., 'marketing agencies in Dubai'): ").strip()
+    qe = _validate_query(query)
+    if qe:
+        print(f"[ERROR] {qe}.")
+        input("\nPress Enter to return to menu...")
+        return
+    scroll_cycles_str = input("Max scroll cycles (default 30): ").strip()
+    ce = _validate_page_count(scroll_cycles_str, "Max scroll cycles", maximum=1000)
+    if ce:
+        print(f"[ERROR] {ce}. Using default of 30.")
+        max_cycles = 30
+    else:
+        max_cycles = int(scroll_cycles_str) if scroll_cycles_str else 30
     _logger.info("Launching Google Maps scraper")
 
-    success = await run_maps_scraper(_browser_context, _logger, cfg)
+    success = await run_maps_scraper(_browser_context, _logger, cfg, query, max_cycles)
 
     if success:
         _logger.info("Maps scraper completed successfully")
@@ -453,7 +401,7 @@ async def _menu_run_maps(cfg: Dict[str, Any]) -> None:
     input("\nPress Enter to return to menu...")
 
 
-async def _menu_run_linkedin(cfg: Dict[str, Any]) -> None:
+async def _menu_run_linkedin(cfg: dict[str, Any]) -> None:
     if not _browser_context:
         print("\n[ERROR] No active browser session. Please run option 1 first.")
         _logger.warning("LinkedIn enrichment requested but no browser session active")
@@ -463,10 +411,24 @@ async def _menu_run_linkedin(cfg: Dict[str, Any]) -> None:
     print("\n" + "=" * 55)
     print("   LINKEDIN COMPANY ENRICHMENT")
     print("=" * 55)
+    print("   Lightweight enrichment — safe, slow, logged-in session only.")
     print("   Using existing browser session.")
+    default_csv = BASE_DIR / "exports" / "linkedin" / "input_companies.csv"
+    input_csv = input(f"Path to CSV with companies (default: {default_csv}): ").strip()
+    csv_path = Path(input_csv) if input_csv else default_csv
+    if not csv_path.exists():
+        print(f"\n[ERROR] File not found: {csv_path}")
+        print("[INFO] Create a CSV with columns: company_name, website (website optional)")
+        input("\nPress Enter to return to menu...")
+        return
+    confirm = input("\nProceed with enrichment? (y/n): ").strip().lower()
+    if confirm != "y":
+        print("Cancelled.")
+        input("\nPress Enter to return to menu...")
+        return
     _logger.info("Launching LinkedIn enrichment")
 
-    success = await run_linkedin_enrichment(_browser_context, _logger, cfg)
+    success = await run_linkedin_enrichment(_browser_context, _logger, cfg, csv_path)
 
     if success:
         _logger.info("LinkedIn enrichment completed successfully")
@@ -478,7 +440,7 @@ async def _menu_run_linkedin(cfg: Dict[str, Any]) -> None:
     input("\nPress Enter to return to menu...")
 
 
-async def _menu_run_merge(cfg: Dict[str, Any]) -> None:
+async def _menu_run_merge(cfg: dict[str, Any]) -> None:
     print("\n" + "=" * 55)
     print("   MASTER MERGE ENGINE")
     print("=" * 55)
@@ -497,7 +459,7 @@ async def _menu_run_merge(cfg: Dict[str, Any]) -> None:
     input("\nPress Enter to return to menu...")
 
 
-async def _show_menu(cfg: Dict[str, Any]) -> None:
+async def _show_menu(cfg: dict[str, Any]) -> None:
     while True:
         print("\n" + "=" * 55)
         print("   LEAD EXTRACTION SYSTEM — MAIN MENU")
@@ -510,10 +472,11 @@ async def _show_menu(cfg: Dict[str, Any]) -> None:
         print("   4. Run Google Maps Scraper")
         print("   5. Run LinkedIn Enrichment")
         print("   6. Merge All Leads")
-        print("   7. Exit")
+        print("   7. Cleanup Old Exports")
+        print("   8. Exit")
         print("=" * 55)
 
-        choice = input("\nEnter your choice (1-7): ").strip()
+        choice = input("\nEnter your choice (1-8): ").strip()
 
         if choice == "1":
             await _menu_setup_browser_session(cfg)
@@ -528,30 +491,37 @@ async def _show_menu(cfg: Dict[str, Any]) -> None:
         elif choice == "6":
             await _menu_run_merge(cfg)
         elif choice == "7":
+            deleted = cleanup_old_exports(_logger)
+            print(f"\nCleanup removed {deleted} old export file(s).")
+        elif choice == "8":
             print("\nExiting...")
             break
         else:
-            print("\n[ERROR] Invalid choice. Please enter 1, 2, 3, 4, 5, 6, or 7.")
+            print("\n[ERROR] Invalid choice. Please enter 1-8.")
 
 
 async def main() -> None:
     global _logger
 
-    _ensure_directories()
-    _logger = _setup_logging()
+    if sys.version_info < (3, 10):
+        print("ERROR: Python 3.10+ required")
+        sys.exit(1)
+
+    in_venv = hasattr(sys, "real_prefix") or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
+    if not in_venv:
+        print("WARNING: Not running in a virtual environment. Create one with: python -m venv venv")
+
+    ensure_directories()
+    _logger = setup_logging("lead_system")
 
     _logger.info("=" * 55)
     _logger.info("Lead Extraction System started")
     _logger.info("=" * 55)
 
-    try:
-        cfg = _load_config()
-        _logger.info("Configuration loaded from %s", CONFIG_PATH)
-    except Exception as e:
-        _logger.critical("Failed to load config: %s", e)
-        sys.exit(1)
+    cfg = load_config()
+    _logger.info("Configuration loaded from %s", CONFIG_PATH)
 
-    print(f"\nLead Extraction System v1.0")
+    print("\nLead Extraction System v1.0")
     print(f"Working directory: {BASE_DIR}")
 
     try:

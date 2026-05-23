@@ -108,11 +108,11 @@ export function getExports(): Promise<ExportsResponse> {
 }
 
 export function deleteExport(filePath: string): Promise<{ deleted: boolean; path: string }> {
-  return api.delete(`/export/${encodeURIComponent(filePath)}`).then((r) => r.data);
+  return api.delete(`/export/${encodeURI(filePath)}`).then((r) => r.data);
 }
 
 export function getExportDownloadUrl(file: ExportFile): string {
-  return `${API_BASE}/download/${encodeURIComponent(file.path)}`;
+  return `${API_BASE}/download/${encodeURI(file.path)}`;
 }
 
 export interface GeoLocation {

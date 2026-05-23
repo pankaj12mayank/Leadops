@@ -3,14 +3,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getHealth, getExports, getStatus, type HealthResponse, type ExportsResponse, type StatusResponse } from "@/lib/api";
 import { PageLoading } from "@/components/shared/LoadingState";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { Activity, Globe, FileDown, ListChecks, Wifi, WifiOff } from "lucide-react";
+import { Globe, FileDown, ListChecks, Wifi } from "lucide-react";
+import { StatusBadge } from "@/components/shared/StatusBadge";
 
 export default function Dashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [exports, setExports] = useState<ExportsResponse | null>(null);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initialLoadDone = useRef(false);
 
@@ -116,9 +117,4 @@ function StatCard({ icon: Icon, label, value, color }: { icon: React.ElementType
   );
 }
 
-function StatusBadge({ value, type = "status" }: { value: string; type?: "source" | "status" }) {
-  const colors: Record<string, string> = type === "source"
-    ? { clutch: "bg-blue-500/10 text-blue-400", goodfirms: "bg-green-500/10 text-green-400", maps: "bg-orange-500/10 text-orange-400", linkedin: "bg-sky-500/10 text-sky-400", merge: "bg-purple-500/10 text-purple-400" }
-    : { pending: "bg-yellow-500/10 text-yellow-400", running: "bg-blue-500/10 text-blue-400", completed: "bg-green-500/10 text-green-400", failed: "bg-red-500/10 text-red-400", cancelled: "bg-gray-500/10 text-gray-400" };
-  return <span className={`inline-flex items-center rounded-md border border-current/30 px-2 py-0.5 text-xs font-medium ${colors[value] || "bg-gray-500/10 text-gray-400"}`}>{value}</span>;
-}
+

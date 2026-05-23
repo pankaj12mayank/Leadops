@@ -1,0 +1,24 @@
+{
+  "app": {
+    "title": "Lead System",
+    "connecting": "Connecting...",
+    "disconnected": "Disconnected",
+    "api": "API",
+    "browser": "Browser",
+    "active": "Active",
+    "inactive": "Inactive",
+    "tasks": "Tasks"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "scrapers": "Scrapers",
+    "logs": "Logs",
+    "exports": "Exports",
+    "settings": "Settings",
+    "open_menu": "Open navigation menu",
+    "close_sidebar": "Close sidebar",
+    "sidebar_label": "Navigation sidebar",
+    "theme_light": "Switch to light mode",
+    "theme_dark": "Switch to dark mode"
+  }
+}

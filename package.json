@@ -1,0 +1,22 @@
+{
+  "name": "leadops",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "python -m uvicorn api.server:app --reload --host 127.0.0.1 --port 8000",
+    "dev": "concurrently -n fe,be -c cyan,yellow \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "build": "cd frontend && npm run build",
+    "lint:py": "ruff check .",
+    "lint:ts": "cd frontend && npx tsc --noEmit",
+    "lint": "npm run lint:py && npm run lint:ts",
+    "test:py": "pytest",
+    "test:ts": "cd frontend && npx vitest run",
+    "test": "npm run test:py && npm run test:ts",
+    "clean": "rm -rf frontend/dist exports/**/*.csv exports/**/*.json exports/**/*.parquet exports/**/*.xlsx temp screenshots",
+    "setup": "python -m venv venv && .\\venv\\Scripts\\pip install -r requirements.txt && cd frontend && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
