@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scrapers.base import (
+from backend.scrapers.base import (
     accept_cookies,
     build_page_url,
     extract_rating_from_text,

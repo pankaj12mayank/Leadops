@@ -18,6 +18,6 @@ RUN cd frontend && npm install && npm run build
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python healthcheck.py --url http://127.0.0.1:8000/health --timeout 5
+    CMD python -m backend.core.health --url http://127.0.0.1:8000/health --timeout 5
 
-CMD ["python", "-m", "uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "backend.core.server:app", "--host", "0.0.0.0", "--port", "8000"]

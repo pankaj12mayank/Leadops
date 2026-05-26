@@ -1,0 +1,103 @@
+{
+  "seo": {
+    "title": "LeadOps — Business Lead Extraction",
+    "metaDescription": "Extract business leads from Clutch, GoodFirms, Google Maps, and LinkedIn. Preview results, pay to unlock, and download clean CSV exports.",
+    "keywords": "lead generation, business leads, web scraping, Clutch leads, GoodFirms leads, Google Maps leads, LinkedIn enrichment, CSV export, B2B leads"
+  },
+  "brand": {
+    "name": "LeadOps",
+    "tagline": "Extract Business Leads in Minutes"
+  },
+  "hero": {
+    "title": "Extract Business Leads<br />in Minutes",
+    "subtitle": "Scrape Clutch, GoodFirms, Google Maps, and LinkedIn. Preview results, pay to unlock, and download clean CSV exports.",
+    "cta": "Start Extracting"
+  },
+  "features": {
+    "heading": "How It Works",
+    "items": [
+      {
+        "title": "Scrape",
+        "description": "Choose a data source and run your search. We extract every result."
+      },
+      {
+        "title": "Preview",
+        "description": "See a sample of your data before you pay. Verify quality first."
+      },
+      {
+        "title": "Pay & Unlock",
+        "description": "One simple payment unlocks the full dataset with no recurring fees."
+      },
+      {
+        "title": "Export CSV",
+        "description": "Download a clean, UTF-8 CSV with all fields quoted and deduplicated."
+      }
+    ]
+  },
+  "search": {
+    "heading": "Extract Leads",
+    "subtitle": "Choose a source and enter your search criteria",
+    "labels": {
+      "source": "Source",
+      "keyword": "Keyword",
+      "location": "Location (optional)",
+      "maxPages": "Max Pages"
+    },
+    "placeholders": {
+      "keyword": "e.g. marketing agencies",
+      "location": "e.g. New York"
+    },
+    "button": "Scrape"
+  },
+  "results": {
+    "empty": "Run a search above to see preview results here.",
+    "locked": "more leads locked",
+    "unlockCta": "Unlock Full Results",
+    "downloadCta": "Download CSV"
+  },
+  "pricing": {
+    "heading": "Simple Pricing",
+    "subtitle": "Pay once per export. No subscriptions.",
+    "perExport": "Per Export",
+    "price": "$9",
+    "priceDescription": "One-time payment for full CSV download",
+    "features": [
+      "All leads unlocked",
+      "UTF-8 CSV with BOM",
+      "Quoted fields, no broken rows",
+      "7-day download access",
+      "Duplicate-free export"
+    ],
+    "cta": "Get Started"
+  },
+  "faq": {
+    "heading": "FAQ",
+    "items": [
+      {
+        "question": "What sources do you support?",
+        "answer": "Clutch.co, GoodFirms.co, Google Maps, and LinkedIn enrichment. More sources coming soon."
+      },
+      {
+        "question": "How is the CSV formatted?",
+        "answer": "UTF-8 with BOM, all fields quoted, commas escaped. Columns: source, business_name, website, phone, email, location, category, rating."
+      },
+      {
+        "question": "How does deduplication work?",
+        "answer": "Leads are deduplicated by website + phone. Only the first occurrence is kept — no duplicates in your export."
+      },
+      {
+        "question": "How long is my export available?",
+        "answer": "7 days from completion. After that, the file is automatically deleted."
+      }
+    ]
+  },
+  "nav": {
+    "links": [
+      { "label": "Features", "href": "#features" },
+      { "label": "Search", "href": "#search" },
+      { "label": "Results", "href": "#results" },
+      { "label": "Pricing", "href": "#pricing" },
+      { "label": "FAQ", "href": "#faq" }
+    ]
+  }
+}

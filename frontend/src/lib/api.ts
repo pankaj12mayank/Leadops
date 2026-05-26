@@ -1,187 +1,188 @@
 import axios from "axios";
 
+export type { SiteContent } from "./site-content";
+
 const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
 export const api = axios.create({
   baseURL: API_BASE,
-  timeout: 10000,
+  timeout: 15000,
   headers: { "Content-Type": "application/json" },
 });
 
 api.interceptors.response.use(
-  (response) => {
-    if (response.data && typeof response.data === "object" && "success" in response.data) {
-      return { ...response, data: response.data.data ?? response.data };
+  (res) => {
+    if (res.data && typeof res.data === "object" && "success" in res.data) {
+      return { ...res, data: res.data.data ?? res.data };
     }
-    return response;
+    return res;
   }
 );
 
-export interface HealthResponse {
+export interface HealthResp {
   status: string;
   browser_session: string;
-  active_tasks: number;
+  current_job_id: number | null;
 }
 
-export interface TaskInfo {
-  task_id: string;
+export interface JobInfo {
+  id: number;
   source: string;
+  query: string | null;
   status: string;
-  started_at: string | null;
-  completed_at: string | null;
-  result: boolean | null;
-  error: string | null;
+  total_found: number;
+  progress: number;
+  created_at: string;
+  updated_at: string;
+  error_message: string | null;
 }
 
-export interface StatusResponse {
-  active_sources: string[];
-  total_tasks: number;
-  tasks: TaskInfo[];
+export interface JobListResp {
+  current_job: JobInfo | null;
+  total_jobs: number;
+  jobs: JobInfo[];
 }
 
-export interface ExportFile {
-  path: string;
-  filename: string;
-  size_bytes: number;
+export interface LeadRow {
+  id: number;
   source: string;
-  last_modified: string;
-  type: string;
+  business_name: string | null;
+  website: string | null;
+  phone: string | null;
+  email: string | null;
+  location: string | null;
+  category: string | null;
+  rating: number | null;
 }
 
-export interface ExportsResponse {
-  total_files: number;
-  total_size_bytes: number;
-  total_size_kb: number;
-  sources: string[];
-  files: ExportFile[];
+export interface JobLeadsResp {
+  leads: LeadRow[];
+  total: number;
 }
 
-export interface LogEntry {
-  lineno: number;
-  timestamp: string | null;
-  level: string | null;
-  name: string | null;
-  message: string;
-  raw: string;
-}
-
-export interface LogsResponse {
-  file: string;
-  total_lines: number;
-  returned: number;
-  entries: LogEntry[];
-}
-
-export interface LogsQuery {
-  lines?: number;
-  source?: string;
-  reverse?: boolean;
-}
-
-export interface StartResponse {
-  task_id: string;
-  source: string;
-  status: string;
-}
-
-export function getHealth(): Promise<HealthResponse> {
+export function getHealth(): Promise<HealthResp> {
   return api.get("/health").then((r) => r.data);
 }
 
-export function getStatus(taskId?: string): Promise<StatusResponse> {
-  const params = taskId ? { task_id: taskId } : {};
-  return api.get("/status", { params }).then((r) => r.data);
-}
-
-export function startScraper(
-  source: string,
-  body: Record<string, unknown>
-): Promise<StartResponse> {
+export function startScraper(source: string, body: Record<string, unknown>): Promise<{ job_id: number; status: string }> {
   return api.post(`/start/${source}`, body).then((r) => r.data);
 }
 
-export function stopScraper(source: string): Promise<{ source: string; status: string }> {
-  return api.post(`/stop/${source}`).then((r) => r.data);
+export function getStatus(): Promise<JobListResp> {
+  return api.get("/status").then((r) => r.data);
 }
 
-export function runMerge(): Promise<StartResponse> {
-  return api.post("/merge").then((r) => r.data);
+export function getJob(jobId: number): Promise<{ job: JobInfo }> {
+  return api.get(`/db/jobs/${jobId}`).then((r) => r.data);
 }
 
-export function getLogs(params?: LogsQuery): Promise<LogsResponse> {
-  return api.get("/logs", { params }).then((r) => r.data);
+export function getJobLeads(jobId: number): Promise<JobLeadsResp> {
+  return api.get(`/db/jobs/${jobId}/leads`).then((r) => r.data);
 }
 
-export function getExports(): Promise<ExportsResponse> {
-  return api.get("/exports").then((r) => r.data);
+export function getJobExportUrl(jobId: number): string {
+  return `${API_BASE}/download/job/${jobId}`;
 }
 
-export function deleteExport(filePath: string): Promise<{ deleted: boolean; path: string }> {
-  return api.delete(`/export/${encodeURIComponent(filePath)}`).then((r) => r.data);
+export interface PreviewStatusResp {
+  previewed: boolean;
+  viewed_at: string | null;
 }
 
-export function getExportDownloadUrl(file: ExportFile): string {
-  return `${API_BASE}/download/${encodeURIComponent(file.path)}`;
+export function getPreviewStatus(jobId: number): Promise<PreviewStatusResp> {
+  return api.get(`/preview/status/${jobId}`).then((r) => r.data);
 }
 
-export interface GeoLocation {
-  latitude: number;
-  longitude: number;
+export function unlockPreview(jobId: number): Promise<{ granted: boolean; reason?: string }> {
+  return api.post(`/preview/job/${jobId}`).then((r) => r.data);
 }
 
-export interface BrowserSettings {
-  headless: boolean;
-  timeout: number;
-  retry_count: number;
-  min_delay: number;
-  max_delay: number;
-  concurrency: number;
-  viewport_width: number;
-  viewport_height: number;
-  user_agent: string;
-  locale: string;
-  timezone_id: string;
-  geolocation: GeoLocation;
+export interface PaymentStatusResp {
+  paid: boolean;
+  exists: boolean;
+  payment_status: string | null;
 }
 
-export interface SessionSettingsConfig {
-  storage_path: string;
-  state_file: string;
-  auto_save: boolean;
+export function getPaymentStatus(jobId: number): Promise<PaymentStatusResp> {
+  return api.get(`/stripe/check/${jobId}`).then((r) => r.data);
 }
 
-export interface ExportSettingsConfig {
-  format: string;
-  encoding: string;
+export function createCheckoutSession(jobId: number, successUrl?: string, cancelUrl?: string): Promise<{ checkout_url: string }> {
+  return api.post("/stripe/checkout", { job_id: jobId, success_url: successUrl, cancel_url: cancelUrl }).then((r) => r.data);
 }
 
-export interface LoggingSettingsConfig {
-  level: string;
-  file: string;
-  max_bytes: number;
-  backup_count: number;
-  format: string;
+// ── Admin API ──────────────────────────────────────────
+
+export interface AdminLoginResp {
+  token: string;
+  email: string;
 }
 
-export interface PathsConfig {
-  exports: string;
-  screenshots: string;
-  temp: string;
-  sessions: string;
+export interface AdminJobInfo {
+  id: number;
+  source: string;
+  query: string | null;
+  status: string;
+  total_found: number;
+  progress: number;
+  created_at: string;
+  updated_at: string;
+  error_message: string | null;
+  payment_status: string | null;
 }
 
-export interface SystemConfig {
-  browser: BrowserSettings;
-  session: SessionSettingsConfig;
-  export: ExportSettingsConfig;
-  logging: LoggingSettingsConfig;
-  paths: PathsConfig;
+export interface AdminJobsResp {
+  jobs: AdminJobInfo[];
+  total: number;
 }
 
-export function getSettings(): Promise<SystemConfig> {
-  return api.get("/settings").then((r) => r.data);
+export interface AdminRetryResp {
+  new_job_id: number;
+  source: string;
+  query: string | null;
 }
 
-export function updateSettings(body: SystemConfig): Promise<SystemConfig> {
-  return api.post("/settings", body).then((r) => r.data);
+let _adminToken: string | null = null;
+
+export function setAdminToken(token: string | null) {
+  _adminToken = token;
+  if (token) {
+    sessionStorage.setItem("leadops_admin_token", token);
+  } else {
+    sessionStorage.removeItem("leadops_admin_token");
+  }
+}
+
+export function getAdminToken(): string | null {
+  if (!_adminToken) {
+    _adminToken = sessionStorage.getItem("leadops_admin_token");
+  }
+  return _adminToken;
+}
+
+function adminApi() {
+  const token = getAdminToken();
+  return {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  };
+}
+
+export function adminLogin(email: string, password: string): Promise<AdminLoginResp> {
+  return api.post("/admin/login", { email, password }).then((r) => r.data);
+}
+
+export function adminChangePassword(oldPassword: string, newPassword: string): Promise<{ changed: boolean }> {
+  return api.post("/admin/change-password", { old_password: oldPassword, new_password: newPassword }, adminApi()).then((r) => r.data);
+}
+
+export function adminListJobs(): Promise<AdminJobsResp> {
+  return api.get("/admin/jobs", adminApi()).then((r) => r.data);
+}
+
+export function adminRetryJob(jobId: number): Promise<AdminRetryResp> {
+  return api.post(`/admin/jobs/${jobId}/retry`, {}, adminApi()).then((r) => r.data);
+}
+
+export function adminDeleteExport(jobId: number): Promise<{ deleted: boolean; job_id: number }> {
+  return api.delete(`/admin/exports/${jobId}`, adminApi()).then((r) => r.data);
 }

@@ -10,7 +10,7 @@ dev:
 	npm run dev
 
 dev-backend:
-	python -m uvicorn api.server:app --reload --host 127.0.0.1 --port 8000
+	python -m uvicorn backend.core.server:app --reload --host 127.0.0.1 --port 8000
 
 dev-frontend:
 	cd frontend && npm run dev
@@ -19,8 +19,8 @@ build:
 	cd frontend && npm run build
 
 clean:
-	rm -rf frontend/dist temp screenshots
-	find exports -type f \( -name '*.csv' -o -name '*.json' -o -name '*.parquet' -o -name '*.xlsx' \) -delete
+	rm -rf frontend/dist temp storage/screenshots
+	find content -type f \( -name '*.csv' -o -name '*.json' -o -name '*.parquet' -o -name '*.xlsx' \) -delete
 
 test:
 	pytest

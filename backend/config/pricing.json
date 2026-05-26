@@ -1,0 +1,8 @@
+{
+  "product_name": "Lead Export",
+  "description": "Full CSV export of all leads from a single scrape job",
+  "unit_amount_usd": 9.00,
+  "currency": "usd",
+  "success_url": "/results",
+  "stripe_price_lookup_key": "lead_export_usd_9"
+}

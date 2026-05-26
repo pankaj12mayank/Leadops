@@ -16,9 +16,8 @@ dependencies = [
     "pyarrow==20.0.0",
     "python-dotenv==1.1.0",
     "cryptography~=44.0.3",
-    "slowapi==0.1.9",
-    "httptools>=0.6.0",
-    "websockets>=14.0",
+    "stripe>=15.0.0",
+    "pyjwt>=2.0.0",
 ]
 
 [tool.pytest.ini_options]
@@ -39,7 +38,7 @@ ignore_missing_imports = true
 warn_unused_configs = true
 
 [tool.coverage.run]
-source = ["api", "scrapers", "config", "session_encrypt"]
+source = ["backend.core", "backend.scrapers", "backend.config", "backend.auth", "backend.storage"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
