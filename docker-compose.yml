@@ -17,7 +17,7 @@ services:
       - SESSION_ENCRYPT_KEY=${SESSION_ENCRYPT_KEY:-}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "healthcheck.py", "--url", "http://127.0.0.1:8000/health", "--timeout", "5"]
+      test: ["CMD", "python", "-m", "backend.core.health", "--url", "http://127.0.0.1:8000/health", "--timeout", "5"]
       interval: 30s
       timeout: 5s
       retries: 3

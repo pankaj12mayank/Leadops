@@ -1,15 +1,15 @@
 import hashlib
 import logging
 import time
-from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from backend.storage.database import get_db
 
 _logger = logging.getLogger("security")
 
 VALID_SOURCES = frozenset({"clutch", "goodfirms", "maps", "linkedin"})
+VALID_JOB_STATUSES = frozenset({"queued", "running", "completed", "failed", "cancelled"})
 MAX_PAGES_LIMIT = 20
 _RATE_LIMIT_WINDOW = 3600
 _RATE_LIMIT_MAX = 3
@@ -17,8 +17,16 @@ _RATE_LIMIT_MAX = 3
 
 def validate_source(source: str) -> str:
     if source not in VALID_SOURCES:
-        raise HTTPException(status_code=400, detail=f"Invalid source: '{source}'. Must be one of: {', '.join(sorted(VALID_SOURCES))}")
+        valid = ", ".join(sorted(VALID_SOURCES))
+        raise HTTPException(status_code=400, detail=f"Invalid source: '{source}'. Must be one of: {valid}")
     return source
+
+
+def validate_job_status(status: str) -> str:
+    if status not in VALID_JOB_STATUSES:
+        valid = ", ".join(sorted(VALID_JOB_STATUSES))
+        raise HTTPException(status_code=400, detail=f"Invalid status: '{status}'. Must be one of: {valid}")
+    return status
 
 
 def validate_query(query: str) -> str:
@@ -85,3 +93,15 @@ def prune_rate_limits() -> None:
         cur = conn.execute("DELETE FROM rate_limits WHERE created_at < ?", (cutoff,))
         if cur.rowcount > 0:
             _logger.debug("Pruned %d expired rate limit records", cur.rowcount)
+
+
+def require_api_key(request: Request) -> None:
+    import os
+    api_key = os.environ.get("API_KEY", "")
+    if not api_key:
+        return
+    header = request.headers.get("X-API-Key", "")
+    if not header:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key header")
+    if header != api_key:
+        raise HTTPException(status_code=403, detail="Invalid API key")

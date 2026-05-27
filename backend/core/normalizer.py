@@ -11,21 +11,6 @@ NORMALIZED_FIELDS = [
     "rating",
 ]
 
-SOURCE_LABELS = {
-    "clutch": "clutch",
-    "goodfirms": "goodfirms",
-    "maps": "google_maps",
-    "linkedin": "linkedin",
-}
-
-SOURCE_CONTENT_DIRS = {
-    "clutch": "agency",
-    "goodfirms": "agency",
-    "maps": "local",
-    "linkedin": "startup",
-}
-
-
 def _safe_float(val: Any) -> Optional[float]:
     if val is None:
         return None

@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from backend.config.loader import BASE_DIR
+from backend.core.exporter import sanitize_dataframe
 
 NORMALIZED_COLUMNS = [
     "company_name",
@@ -391,18 +392,14 @@ async def run_merge_engine(logger, confirm: bool = False) -> bool:
     source_files = scan_source_files()
     if not source_files:
         logger.warning("No source CSV files found in any export directory")
-        print("\n[WARNING] No CSV files found in any export directory.")
-        print("           Run scrapers first to generate data.")
+        logger.info("Run scrapers first to generate data.")
         return False
 
-    print("\n" + "=" * 55)
-    print("   MASTER MERGE ENGINE")
-    print("=" * 55)
-    print("\nSource files found:")
+    logger.info("Source files found:")
     for source, files in source_files.items():
         for f in files:
             size_kb = f.stat().st_size / 1024
-            print(f"   [{source.upper():<10s}] {f.name} ({size_kb:.1f} KB)")
+            logger.info("  [%s] %s (%.1f KB)", source.upper(), f.name, size_kb)
 
     if not confirm:
         confirm_resp = input("\nProceed with merge? (y/n): ").strip().lower()
@@ -431,7 +428,6 @@ async def run_merge_engine(logger, confirm: bool = False) -> bool:
 
     if not all_frames:
         logger.warning("No rows could be extracted from any source")
-        print("\n[ERROR] No data could be extracted from the source files.")
         return False
 
     combined = pd.concat(all_frames, ignore_index=True)
@@ -459,18 +455,15 @@ async def run_merge_engine(logger, confirm: bool = False) -> bool:
 
     try:
         tmp_path = merged_dir / f"master_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}_tmp.csv"
-        combined.to_csv(tmp_path, index=False, encoding="utf-8-sig")
+        sanitize_dataframe(combined).to_csv(tmp_path, index=False, encoding="utf-8-sig")
         if output_path.exists():
             output_path.unlink()
         shutil.move(str(tmp_path), str(output_path))
         file_size_kb = output_path.stat().st_size / 1024
         logger.info("Master leads exported: %s (%d rows, %.1f KB)", output_path, len(combined), file_size_kb)
-        print(f"\n[SUCCESS] Master leads exported to: {output_path}")
-        print(f"          {len(combined)} total leads ({file_size_kb:.1f} KB)")
         return True
     except Exception as e:
         logger.error("Failed to write master CSV: %s", e)
-        print(f"\n[ERROR] Failed to write master CSV: {e}")
         return False
 
 

@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -78,31 +77,6 @@ async def get_context() -> BrowserContext:
     if _context is None:
         raise RuntimeError("Browser not initialized. Call init_browser() first.")
     return _context
-
-
-async def save_session(cfg: dict[str, Any]) -> None:
-    if _context is None:
-        return
-    state_path = BASE_DIR / cfg["session"]["storage_path"] / cfg["session"]["state_file"]
-    try:
-        cookies = await _context.cookies()
-        state = {"cookies": cookies, "origins": []}
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-
-        enc_key_secret = get_session_encrypt_key()
-        if enc_key_secret:
-            key = make_key_from_secret(enc_key_secret)
-            if key:
-                encrypted = encrypt_state(state, key)
-                state_path.write_text(encrypted, encoding="utf-8")
-                _log().info("Session state encrypted and saved to %s", state_path)
-                return
-
-        with open(state_path, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
-        _log().info("Session state saved to %s", state_path)
-    except Exception as e:
-        _log().error("Failed to save session state: %s", e)
 
 
 async def close_browser() -> None:

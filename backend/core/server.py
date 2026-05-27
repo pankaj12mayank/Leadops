@@ -1,10 +1,9 @@
 import asyncio
-import hashlib
 import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.auth.jwt_auth import create_access_token, decode_access_token, hash_password, verify_password
-from backend.config.loader import BASE_DIR, CONFIG_PATH, load_config, setup_logging
+from backend.config.loader import BASE_DIR, load_config, setup_logging
 from backend.core.browser import check_health, close_browser, init_browser
 from backend.core.exporter import EXPORTS_DIR, cleanup_expired_exports, export_still_valid, get_export_path
 from backend.core.job_manager import JobManager
@@ -22,6 +21,8 @@ from backend.core.security import (
     check_rate_limit,
     hash_ip,
     prune_rate_limits,
+    require_api_key,
+    validate_job_status,
     validate_max_pages,
     validate_query,
     validate_source,
@@ -35,9 +36,8 @@ from backend.payments.stripe_checkout import (
 from backend.scrapers.base import NavigationError, ScraperError
 from backend.storage.database import (
     count_leads,
-    get_admin_user,
     create_admin_user,
-    update_admin_password,
+    get_admin_user,
     get_job,
     get_leads_by_job,
     get_preview_access,
@@ -45,6 +45,7 @@ from backend.storage.database import (
     init_db,
     list_jobs,
     list_leads,
+    update_admin_password,
 )
 
 app = FastAPI(title="Lead Extraction API", version="1.0.0")
@@ -81,18 +82,6 @@ async def _generic_exception_handler(request: Request, exc: Exception):
 
 
 @app.middleware("http")
-async def _rewrite_api_prefix(request: Request, call_next):
-    path = request.url.path
-    if path.startswith("/api"):
-        remaining = path[4:] or "/"
-        request.scope["path"] = remaining
-        raw_path = request.scope.get("raw_path", b"")
-        if raw_path:
-            request.scope["raw_path"] = raw_path[len(b"/api"):] or b"/"
-    return await call_next(request)
-
-
-@app.middleware("http")
 async def _timeout_middleware(request: Request, call_next):
     try:
         return await asyncio.wait_for(call_next(request), timeout=120.0)
@@ -122,6 +111,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def _rewrite_api_prefix(request: Request, call_next):
+    path = request.url.path
+    if path == "/api" or path.startswith("/api/"):
+        remaining = path[3:] or "/"
+        request.scope["path"] = remaining
+        raw_path = request.scope.get("raw_path", b"")
+        if raw_path:
+            request.scope["raw_path"] = raw_path[len(b"/api"):] or b"/"
+    return await call_next(request)
+
+_api_key_configured = bool(os.environ.get("API_KEY"))
+if _api_key_configured:
+    @app.middleware("http")
+    async def _enforce_api_key(request: Request, call_next):
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        path = request.url.path
+        public_paths = {"/health", "/docs", "/openapi.json", "/redoc", "/stripe/webhook"}
+        if path in public_paths or path.startswith("/admin/login"):
+            return await call_next(request)
+        require_api_key(request)
+        return await call_next(request)
 
 _stripe_secret = os.environ.get("STRIPE_SECRET_KEY", "")
 _stripe_webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
@@ -160,7 +173,8 @@ async def require_admin(request: Request):
 async def _on_startup() -> None:
     _api_logger.info("API server starting up")
     prune_rate_limits()
-    cleanup_expired_exports(_api_logger)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, cleanup_expired_exports, _api_logger)
     cfg = load_config()
     browser_ok = await init_browser(cfg)
     if browser_ok:
@@ -191,50 +205,6 @@ class StartMapsQuery(BaseModel):
 
 class StartLinkedinQuery(BaseModel):
     csv_path: str = Field(default="", max_length=500)
-
-
-class ExportFile(BaseModel):
-    path: str
-    filename: str
-    size_bytes: int
-    source: str
-    last_modified: str
-    type: str = "raw"
-
-
-EXPORT_SOURCES = ["agency", "startup", "local", "merged"]
-
-
-def _export_type(source: str, filename: str) -> str:
-    return "merged" if source == "merged" else "raw"
-
-
-def _scan_export_files() -> list[ExportFile]:
-    files: list[ExportFile] = []
-    export_dir = BASE_DIR / "content"
-    if not export_dir.exists():
-        return files
-
-    for subdir in export_dir.iterdir():
-        if not subdir.is_dir():
-            continue
-        source_name = subdir.name
-        for fpath in sorted(subdir.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
-            try:
-                stat = fpath.stat()
-                files.append(
-                    ExportFile(
-                        path=str(fpath.relative_to(BASE_DIR)),
-                        filename=fpath.name,
-                        size_bytes=stat.st_size,
-                        source=source_name,
-                        last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                        type=_export_type(source_name, fpath.name),
-                    )
-                )
-            except (OSError, PermissionError):
-                continue
-    return files
 
 
 @app.post("/start/clutch")
@@ -282,6 +252,16 @@ async def start_linkedin(body: StartLinkedinQuery, request: Request):
     csv_path = body.csv_path.strip() if body.csv_path else ""
     if not csv_path:
         csv_path = str(BASE_DIR / "content" / "startup" / "input_companies.csv")
+    else:
+        raw = Path(csv_path)
+        raw = (BASE_DIR / raw).resolve() if not raw.is_absolute() else raw.resolve()
+        try:
+            raw.relative_to(BASE_DIR.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="CSV path must be within project directory") from None
+        if not raw.exists() or not raw.is_file():
+            raise HTTPException(status_code=404, detail="CSV file not found")
+        csv_path = str(raw)
     job_id = await job_manager.enqueue("linkedin", csv_path)
     _api_logger.info("LinkedIn enrichment queued: csv='%s', job_id=%d", csv_path, job_id)
     return _success_response({"job_id": job_id, "source": "linkedin", "status": "queued"})
@@ -289,6 +269,7 @@ async def start_linkedin(body: StartLinkedinQuery, request: Request):
 
 @app.post("/stop/{source}")
 async def stop_scraper(source: str):
+    validate_source(source)
     current_id = job_manager.current_job_id()
     if current_id is None:
         raise HTTPException(status_code=404, detail="No job currently running")
@@ -305,9 +286,12 @@ async def start_merge():
     from backend.storage.merge import run_merge_engine
 
     async def wrapper():
-        return await run_merge_engine(_api_logger, confirm=True)
+        try:
+            return await run_merge_engine(_api_logger, confirm=True)
+        except Exception as e:
+            _api_logger.exception("Merge failed: %s", e)
 
-    task = asyncio.create_task(wrapper())
+    asyncio.create_task(wrapper())
     _api_logger.info("Merge started")
     return _success_response({"source": "merge", "status": "started"})
 
@@ -319,8 +303,9 @@ async def trigger_cleanup():
     cfg = load_config()
     retention = cfg.get("export", {}).get("retention_days", 30)
     max_size = cfg.get("export", {}).get("max_size_mb", 500)
-    merge_deleted = cleanup_merge(_api_logger, retention_days=retention, max_size_mb=max_size)
-    export_deleted = cleanup_expired_exports(_api_logger)
+    loop = asyncio.get_running_loop()
+    merge_deleted = await loop.run_in_executor(None, cleanup_merge, _api_logger, retention, max_size)
+    export_deleted = await loop.run_in_executor(None, cleanup_expired_exports, _api_logger)
     _api_logger.info("Cleanup removed %d merge file(s) and %d export(s)", merge_deleted, export_deleted)
     return _success_response({"deleted_files": merge_deleted + export_deleted, "retention_days": retention})
 
@@ -349,7 +334,7 @@ async def get_exports():
                     "job_id": job_id,
                     "filename": fpath.name,
                     "size_bytes": stat.st_size,
-                    "last_modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                    "last_modified": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
                     "valid": export_still_valid(job_id),
                 })
             except (OSError, ValueError):
@@ -395,7 +380,11 @@ async def download_job_export(job_id: int):
     if not export_still_valid(job_id):
         raise HTTPException(status_code=410, detail="Export has expired (7-day TTL)")
     job = get_job(job_id)
-    if not job or job.get("payment_status", "unpaid") != "paid":
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Job is not completed yet")
+    if job.get("payment_status", "unpaid") != "paid":
         raise HTTPException(status_code=402, detail="Payment required — CSV download is locked")
     media_type = "text/csv"
     safe_name = "".join(c for c in p.name if c.isascii() and c not in "\r\n\"\\")
@@ -419,11 +408,15 @@ async def delete_export(file_path: str, _admin=Depends(require_admin)):
 
 @app.get("/db/jobs")
 async def db_jobs(source: str | None = Query(None), status: str | None = Query(None), limit: int = Query(50)):
+    if source is not None:
+        validate_source(source)
+    if status is not None:
+        validate_job_status(status)
     return _success_response({"jobs": list_jobs(source=source, status=status, limit=limit)})
 
 
 @app.get("/db/jobs/{job_id}")
-async def db_job_detail(job_id: int):
+async def db_job_detail(job_id: int, _admin=Depends(require_admin)):
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -432,7 +425,7 @@ async def db_job_detail(job_id: int):
 
 
 @app.get("/db/jobs/{job_id}/leads")
-async def db_job_leads(job_id: int):
+async def db_job_leads(job_id: int, _admin=Depends(require_admin)):
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -441,15 +434,16 @@ async def db_job_leads(job_id: int):
 
 
 @app.get("/db/leads")
-async def db_leads(source: str | None = Query(None), limit: int = Query(100), offset: int = Query(0)):
+async def db_leads(
+    source: str | None = Query(None),
+    limit: int = Query(100),
+    offset: int = Query(0),
+    _admin=Depends(require_admin),
+):
     return _success_response({
         "leads": list_leads(source=source, limit=limit, offset=offset),
         "total": count_leads(source=source),
     })
-
-
-def _hash_ip(client_ip: str) -> str:
-    return hashlib.sha256(client_ip.encode()).hexdigest()
 
 
 @app.get("/preview/status/{job_id}")
@@ -458,7 +452,7 @@ async def preview_status(job_id: int, request: Request):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     client_ip = request.client.host if request.client else "unknown"
-    ip_hash = _hash_ip(client_ip)
+    ip_hash = hash_ip(client_ip)
     record = get_preview_access(job_id, ip_hash)
     return _success_response({
         "previewed": record is not None,
@@ -474,7 +468,7 @@ async def unlock_preview(job_id: int, request: Request):
     if job["status"] != "completed":
         raise HTTPException(status_code=400, detail="Job is not completed yet")
     client_ip = request.client.host if request.client else "unknown"
-    ip_hash = _hash_ip(client_ip)
+    ip_hash = hash_ip(client_ip)
     record = get_preview_access(job_id, ip_hash)
     if record:
         return _success_response({"granted": False, "reason": "already_previewed"})

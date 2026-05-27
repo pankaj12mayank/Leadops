@@ -1,9 +1,10 @@
 import csv
 import logging
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
+import pandas as pd
 
 from backend.config.loader import BASE_DIR
 from backend.core.normalizer import NORMALIZED_FIELDS
@@ -12,7 +13,6 @@ EXPORTS_DIR = BASE_DIR / "storage" / "exports"
 _EXPORT_TTL_DAYS = 7
 
 CSV_INJECTION_CHARS = ("=", "+", "-", "@")
-_CSV_INJECTION_WARNED: set[int] = set()
 
 
 def _sanitize_csv_value(value: Any) -> str:
@@ -26,7 +26,15 @@ def _sanitize_row(row: list[Any]) -> list[str]:
     return [_sanitize_csv_value(v) for v in row]
 
 
-def export_job_csv(job_id: int, leads: list[dict[str, Any]], logger: Optional[logging.Logger] = None) -> Optional[Path]:
+def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].apply(_sanitize_csv_value)
+    return df
+
+
+def export_job_csv(job_id: int, leads: list[dict[str, Any]], logger: logging.Logger | None = None) -> Path | None:
     if not leads:
         return None
 
@@ -70,7 +78,7 @@ def export_job_csv(job_id: int, leads: list[dict[str, Any]], logger: Optional[lo
     return out
 
 
-def cleanup_expired_exports(logger: Optional[logging.Logger] = None) -> int:
+def cleanup_expired_exports(logger: logging.Logger | None = None) -> int:
     if not EXPORTS_DIR.exists():
         return 0
     cutoff = time.time() - (_EXPORT_TTL_DAYS * 86400)

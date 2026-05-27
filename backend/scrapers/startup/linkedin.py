@@ -66,11 +66,6 @@ def build_company_search_url(company_name: str) -> str:
     return f"https://www.linkedin.com/search/results/companies/?keywords={q}"
 
 
-def build_company_page_url(slug: str) -> str:
-    slug = slug.strip().strip("/")
-    return f"https://www.linkedin.com/company/{slug}/"
-
-
 def extract_company_slug(url: str) -> str | None:
     match = re.search(r"linkedin\.com/company/([^/?]+)", url)
     return match.group(1) if match else None

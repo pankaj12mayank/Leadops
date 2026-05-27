@@ -19,12 +19,6 @@ api.interceptors.response.use(
   }
 );
 
-export interface HealthResp {
-  status: string;
-  browser_session: string;
-  current_job_id: number | null;
-}
-
 export interface JobInfo {
   id: number;
   source: string;
@@ -35,12 +29,6 @@ export interface JobInfo {
   created_at: string;
   updated_at: string;
   error_message: string | null;
-}
-
-export interface JobListResp {
-  current_job: JobInfo | null;
-  total_jobs: number;
-  jobs: JobInfo[];
 }
 
 export interface LeadRow {
@@ -60,16 +48,8 @@ export interface JobLeadsResp {
   total: number;
 }
 
-export function getHealth(): Promise<HealthResp> {
-  return api.get("/health").then((r) => r.data);
-}
-
 export function startScraper(source: string, body: Record<string, unknown>): Promise<{ job_id: number; status: string }> {
   return api.post(`/start/${source}`, body).then((r) => r.data);
-}
-
-export function getStatus(): Promise<JobListResp> {
-  return api.get("/status").then((r) => r.data);
 }
 
 export function getJob(jobId: number): Promise<{ job: JobInfo }> {

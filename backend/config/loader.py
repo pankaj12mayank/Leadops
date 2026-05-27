@@ -135,19 +135,6 @@ def get_session_encrypt_key() -> str:
     return _env("SESSION_ENCRYPT_KEY")
 
 
-def save_config(config_dict: dict[str, Any]) -> None:
-    tmp_path = CONFIG_PATH.with_suffix(".tmp.json")
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(config_dict, f, indent=4, ensure_ascii=False)
-        tmp_path.replace(CONFIG_PATH)
-        shutil.copy2(str(CONFIG_PATH), str(CONFIG_BACKUP_PATH))
-    except OSError:
-        if tmp_path.exists():
-            tmp_path.unlink()
-        raise
-
-
 def _merge_with_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     merged = dict(DEFAULT_CONFIG)
     for section, values in cfg.items():

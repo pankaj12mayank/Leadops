@@ -11,7 +11,6 @@ from backend.storage.database import (
     create_job,
     get_job,
     get_leads_by_job,
-    get_next_queued_job,
     increment_job_retry,
     list_jobs,
     mark_stale_jobs,
@@ -65,8 +64,7 @@ class JobManager:
 
     async def cancel_job(self, job_id: int) -> None:
         self._cancel_requested.add(job_id)
-        update_job(job_id, status="cancelled")
-        self._logger.info("Job %d cancelled", job_id)
+        self._logger.info("Job %d cancel requested", job_id)
 
     def get_job(self, job_id: int) -> Optional[dict[str, Any]]:
         return get_job(job_id)
@@ -76,10 +74,6 @@ class JobManager:
 
     def current_job_id(self) -> Optional[int]:
         return self._current_job_id
-
-    def is_queued(self, job_id: int) -> bool:
-        job = get_job(job_id)
-        return job is not None and job["status"] == "queued"
 
     async def _worker_loop(self) -> None:
         while self._running:

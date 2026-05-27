@@ -15,6 +15,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from backend.auth.session import decrypt_state, encrypt_state, make_key_from_secret
 from backend.config.loader import (
     BASE_DIR,
     CONFIG_PATH,
@@ -23,13 +24,10 @@ from backend.config.loader import (
     load_config,
     setup_logging,
 )
-from backend.scrapers.base import run_linkedin_enrichment, run_maps_scraper, run_search_scraper
 from backend.scrapers.agency import clutch, goodfirms
-from backend.scrapers.local import maps
-from backend.scrapers.startup import linkedin
+from backend.scrapers.base import run_linkedin_enrichment, run_maps_scraper, run_search_scraper
 from backend.storage.database import create_job, import_csv_to_db, init_db, update_job
 from backend.storage.merge import cleanup_old_exports, run_merge_engine
-from backend.auth.session import decrypt_state, encrypt_state, make_key_from_secret
 
 _playwright_instance: Playwright | None = None
 _browser_context: BrowserContext | None = None
@@ -46,7 +44,7 @@ def _validate_query(query: str) -> str | None:
     return None
 
 
-def _validate_page_count(value: str, label: str, minimum: int = 1, maximum: int = 100) -> str | None:
+def _validate_page_count(value: str, label: str, minimum: int = 1, maximum: int = 20) -> str | None:
     if not value:
         return None
     try:
@@ -78,40 +76,6 @@ async def _save_screenshot(page: Page, label: str = "screenshot") -> Path | None
 
 
 _logger = logging.getLogger("lead_system")
-
-
-def _export_dataframe(df: pd.DataFrame, filename: str, export_format: str) -> Path | None:
-    if df.empty:
-        _logger.warning("DataFrame is empty, skipping export for %s", filename)
-        return None
-    safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in filename)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    ext = export_format.strip().lower()
-    known = {"csv", "json", "parquet", "xlsx"}
-    if ext not in known:
-        _logger.warning("Unknown export format '%s', falling back to csv", ext)
-        ext = "csv"
-    out = BASE_DIR / "content" / "merged" / f"{ts}_{safe_name}.{ext}"
-    try:
-        if ext == "csv":
-            df.to_csv(out, index=False, encoding="utf-8-sig")
-        elif ext == "json":
-            df.to_json(out, orient="records", indent=2, force_ascii=False)
-        elif ext == "parquet":
-            df.to_parquet(out, index=False)
-        else:
-            try:
-                df.to_excel(out, index=False)
-            except Exception as xl_err:
-                _logger.error("XLSX export failed for %s: %s, falling back to CSV", filename, xl_err)
-                ext = "csv"
-                out = out.with_suffix(".csv")
-                df.to_csv(out, index=False, encoding="utf-8-sig")
-        _logger.info("Exported %d rows to %s", len(df), out)
-        return out
-    except Exception as e:
-        _logger.error("Export failed for %s: %s", filename, e)
-        return None
 
 
 async def _create_context(playwright: Playwright, cfg: dict[str, Any]) -> BrowserContext:

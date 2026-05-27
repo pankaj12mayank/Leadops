@@ -1,9 +1,7 @@
 import contextlib
 import json
-import os
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Generator, Optional
 
 from backend.config.loader import BASE_DIR
@@ -300,35 +298,6 @@ def insert_lead(
         return cur.lastrowid
 
 
-def insert_leads_bulk(scrape_job_id: int, source: str, rows: list[dict[str, Any]]) -> int:
-    now = _now()
-    inserted = 0
-    with get_db() as conn:
-        for row in rows:
-            conn.execute(
-                """INSERT INTO leads
-                   (scrape_job_id, source, business_name, website, phone, email,
-                    location, category, rating, raw_data, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    scrape_job_id,
-                    source,
-                    row.get("business_name"),
-                    row.get("website"),
-                    row.get("phone"),
-                    row.get("email"),
-                    row.get("location"),
-                    row.get("category"),
-                    row.get("rating"),
-                    json.dumps(row.get("raw_data")) if row.get("raw_data") else None,
-                    now,
-                    now,
-                ),
-            )
-            inserted += 1
-    return inserted
-
-
 def get_leads_by_job(job_id: int) -> list[dict[str, Any]]:
     with get_db() as conn:
         rows = conn.execute(
@@ -413,43 +382,6 @@ def update_job_payment_status(job_id: int, status: str) -> None:
         )
 
 
-# ── preview_tracking ─────────────────────────────────────────
-
-
-def create_preview_record(job_id: int) -> int:
-    now = _now()
-    with get_db() as conn:
-        cur = conn.execute(
-            "INSERT INTO preview_tracking (scrape_job_id, created_at, updated_at) VALUES (?, ?, ?)",
-            (job_id, now, now),
-        )
-        return cur.lastrowid
-
-
-def mark_preview_viewed(job_id: int) -> None:
-    now = _now()
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE preview_tracking SET viewed_at = ?, updated_at = ? WHERE scrape_job_id = ?",
-            (now, now, job_id),
-        )
-
-
-def mark_preview_downloaded(job_id: int) -> None:
-    now = _now()
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE preview_tracking SET downloaded = 1, updated_at = ? WHERE scrape_job_id = ?",
-            (now, job_id),
-        )
-
-
-def get_preview_record(job_id: int) -> Optional[dict[str, Any]]:
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM preview_tracking WHERE scrape_job_id = ?", (job_id,)).fetchone()
-        return dict(row) if row else None
-
-
 # ── preview_access (per-IP) ─────────────────────────────────
 
 
@@ -502,11 +434,6 @@ def update_admin_password(username: str, password_hash: str) -> bool:
             (password_hash, now, username),
         )
         return cur.rowcount > 0
-
-
-def list_admin_users() -> list[dict[str, Any]]:
-    with get_db() as conn:
-        return [dict(r) for r in conn.execute("SELECT id, username, created_at FROM admin_users ORDER BY id").fetchall()]
 
 
 SOURCE_TO_CONTENT_DIR = {

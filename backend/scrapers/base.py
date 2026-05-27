@@ -3,16 +3,17 @@ import logging
 import random
 import re
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
 
 import pandas as pd
 from playwright.async_api import Page
 
-from backend.config.loader import BASE_DIR, setup_logging
-
-_scraper_logger = setup_logging("scrapers")
+from backend.config.loader import BASE_DIR
+from backend.core.exporter import sanitize_dataframe
+from backend.core.normalizer import normalize_leads
 
 
 class ScraperError(Exception):
@@ -20,22 +21,6 @@ class ScraperError(Exception):
 
 
 class NavigationError(ScraperError):
-    pass
-
-
-class ExtractionError(ScraperError):
-    pass
-
-
-class ExportError(ScraperError):
-    pass
-
-
-class CaptchaDetectedError(ScraperError):
-    pass
-
-
-class RateLimitError(ScraperError):
     pass
 
 
@@ -332,10 +317,8 @@ async def run_search_scraper(
     extract_all_cards,
     source_name: str,
     content_subdir: str,
-    progress_callback: Optional[Callable[[int, int, int], Awaitable[None]]] = None,
+    progress_callback: Callable[[int, int, int], Awaitable[None]] | None = None,
 ) -> bool:
-    from backend.core.exporter import export_leads
-
     page: Page | None = None
     all_leads: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -429,11 +412,12 @@ async def run_maps_scraper(
     cfg: dict[str, Any],
     query: str,
     max_cycles: int,
-    progress_callback: Optional[Callable[[int, int, int], Awaitable[None]]] = None,
+    progress_callback: Callable[[int, int, int], Awaitable[None]] | None = None,
 ) -> bool:
-    from backend.core.exporter import export_leads
     from backend.scrapers.local.maps import (
         SELECTORS as MAPS_SELECTORS,
+    )
+    from backend.scrapers.local.maps import (
         build_search_url,
         check_captcha,
         extract_all_items,
@@ -583,11 +567,11 @@ async def run_linkedin_enrichment(
     logger: logging.Logger,
     cfg: dict[str, Any],
     csv_path: Path | None = None,
-    progress_callback: Optional[Callable[[int, int, int], Awaitable[None]]] = None,
+    progress_callback: Callable[[int, int, int], Awaitable[None]] | None = None,
 ) -> bool:
-    from backend.core.exporter import export_leads
-    from backend.scrapers.startup.linkedin import enrich_company
     import pandas as pd
+
+    from backend.scrapers.startup.linkedin import enrich_company
 
     page = None
     all_results: list[dict[str, Any]] = []
@@ -671,6 +655,24 @@ async def run_linkedin_enrichment(
                 pass
 
 
+def export_leads(
+    leads: list[dict[str, Any]],
+    source: str,
+    filename_prefix: str,
+    subdir: str,
+    cfg: dict[str, Any],
+    logger: logging.Logger,
+    normalize: bool = True,
+) -> Path | None:
+    if not leads:
+        logger.warning("No leads to export for %s", filename_prefix)
+        return None
+    if normalize:
+        leads = normalize_leads(source, leads)
+    df = pd.DataFrame(leads)
+    return export_dataframe_to_file(df, filename_prefix, subdir, cfg, logger)
+
+
 def export_dataframe_to_file(
     df: pd.DataFrame,
     filename_prefix: str,
@@ -695,7 +697,7 @@ def export_dataframe_to_file(
     out = BASE_DIR / "content" / subdir / f"{filename}.{ext}"
     try:
         if ext == "csv":
-            df.to_csv(out, index=False, encoding="utf-8-sig")
+            sanitize_dataframe(df).to_csv(out, index=False, encoding="utf-8-sig")
         elif ext == "json":
             df.to_json(out, orient="records", indent=2, force_ascii=False)
         elif ext == "parquet":
@@ -707,7 +709,7 @@ def export_dataframe_to_file(
                 logger.error("XLSX export failed: %s, falling back to CSV", xl_err)
                 ext = "csv"
                 out = out.with_suffix(".csv")
-                df.to_csv(out, index=False, encoding="utf-8-sig")
+                sanitize_dataframe(df).to_csv(out, index=False, encoding="utf-8-sig")
         logger.info("Exported %d rows to %s", len(df), out)
         return out
     except Exception as e:
